@@ -13,7 +13,7 @@ const MODEL = "claude-opus-4-8";
 const MEAL_SCHEMA = {
   type: "object",
   properties: {
-    type: { type: "string" },
+    type: { type: "string", enum: ["Breakfast", "Lunch", "Dinner", "Snack"] },
     name: { type: "string" },
     description: { type: "string" },
     prep: { type: "string" },
@@ -186,6 +186,7 @@ Generate ONLY Day ${dayNum} of ${pairingDays} of this nutrition plan. This day's
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 Include Breakfast, Lunch, Dinner, and 1-2 Snacks. The "day" field must be ${dayNum}.
+The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
 ${ctx.jetlag && dayNum === 1
     ? `Set "jetlagNote" to short, practical meal-timing advice for adjusting to the jet lag described above.`
     : `Set "jetlagNote" to null.`}
