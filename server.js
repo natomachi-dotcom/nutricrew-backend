@@ -42,28 +42,6 @@ const DAY_SCHEMA = {
   additionalProperties: false,
 };
 
-const EXERCISE_SCHEMA = {
-  type: "object",
-  properties: {
-    name: { type: "string" },
-    sets: { type: "string" },
-    reps: { type: "string" },
-  },
-  required: ["name", "sets", "reps"],
-  additionalProperties: false,
-};
-
-const GYM_DAY_SCHEMA = {
-  type: "object",
-  properties: {
-    day: { type: "integer" },
-    focus: { type: "string" },
-    exercises: { type: "array", items: EXERCISE_SCHEMA },
-  },
-  required: ["day", "focus", "exercises"],
-  additionalProperties: false,
-};
-
 const EXTRAS_SCHEMA = {
   type: "object",
   properties: {
@@ -80,15 +58,6 @@ const EXTRAS_SCHEMA = {
       required: ["produce", "protein", "pantry", "snacks", "dairy"],
       additionalProperties: false,
     },
-    gymRoutine: {
-      type: "object",
-      properties: {
-        note: { type: "string" },
-        days: { type: "array", items: GYM_DAY_SCHEMA },
-      },
-      required: ["note", "days"],
-      additionalProperties: false,
-    },
     foodRestrictions: {
       type: "object",
       properties: {
@@ -100,7 +69,7 @@ const EXTRAS_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["summary", "groceryList", "gymRoutine", "foodRestrictions"],
+  required: ["summary", "groceryList", "foodRestrictions"],
   additionalProperties: false,
 };
 
@@ -203,12 +172,11 @@ ${ctx.profile}
 Daily itinerary:
 ${itinerary}
 
-Generate the SUMMARY, GROCERY LIST, GYM ROUTINE, and FOOD RESTRICTIONS sections for this ${pairingDays}-day nutrition plan (day-by-day meals are generated separately).
+Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pairingDays}-day nutrition plan (day-by-day meals are generated separately).
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan.
 - "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing, based on the crew's kitchen access.
-- "gymRoutine": "note" plus exactly ${pairingDays} "days" entries (one per day of the pairing), each with 2-4 bodyweight exercises requiring NO gym or equipment, taking 20-30 minutes, fitting in a hotel room, adapted to a ${data.position}'s schedule.
 - "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.diet} diet while traveling).`;
 }
 
@@ -237,7 +205,6 @@ app.post("/api/generate-plan", async (req, res) => {
       summary: extras.summary,
       days,
       groceryList: extras.groceryList,
-      gymRoutine: extras.gymRoutine,
       foodRestrictions: extras.foodRestrictions,
     });
   } catch (err) {
