@@ -73,6 +73,18 @@ const EXTRAS_SCHEMA = {
   additionalProperties: false,
 };
 
+const AIRPLANE_MEAL_SCHEMA = {
+  type: "object",
+  properties: {
+    fits: { type: "string", enum: ["yes", "no", "partial"] },
+    dietNote: { type: "string" },
+    calories: { type: "integer" },
+    note: { type: "string" },
+  },
+  required: ["fits", "dietNote", "calories", "note"],
+  additionalProperties: false,
+};
+
 const CALORIE_SCHEMA = {
   type: "object",
   properties: {
@@ -226,6 +238,28 @@ app.post("/api/estimate-calories", async (req, res) => {
 
     if (message.stop_reason === "refusal") {
       return res.status(502).json({ error: "The model declined to estimate calories." });
+    }
+
+    res.json(extractJSON(message));
+  } catch (err) {
+    handleAnthropicError(err, res);
+  }
+});
+
+app.post("/api/check-airplane-meal", async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Missing 'prompt' in request body" });
+
+    const message = await client.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      output_config: { format: { type: "json_schema", schema: AIRPLANE_MEAL_SCHEMA } },
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    if (message.stop_reason === "refusal") {
+      return res.status(502).json({ error: "The model declined to check this meal." });
     }
 
     res.json(extractJSON(message));
