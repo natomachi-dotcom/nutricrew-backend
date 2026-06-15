@@ -80,7 +80,10 @@ const MEAL_SCHEMA = {
     type: { type: "string", enum: ["Breakfast", "Lunch", "Dinner", "Snack"] },
     name: { type: "string" },
     description: { type: "string" },
-    prep: { type: "string" },
+    prep: {
+      type: "string",
+      description: "How to prepare or assemble this meal GIVEN THE KITCHEN ACCESS CONSTRAINTS specified above — do not suggest cooking methods or equipment unavailable for this meal's assigned access type.",
+    },
     calories: { type: "integer" },
     protein: { type: "integer" },
     carbs: { type: "integer" },
@@ -238,6 +241,33 @@ function estimateCalorieDeficitTarget(data) {
   return Math.round(Math.max(tdee - 500, floor) / 50) * 50;
 }
 
+// What's actually possible to prepare under each kitchen-access option.
+// Keyed by the values the frontend's kitchen CheckGroup sends.
+const KITCHEN_ACCESS_RULES = {
+  full_kitchen: `"full_kitchen" - Full kitchen access: stove, oven, fridge/freezer, and standard cookware are all available. Normal home cooking (sauteing, baking, roasting, simmering, grilling, etc.) is fine with no special constraints.`,
+  hotel: `"hotel" - Hotel room with NO kitchen: there is NO stove, NO oven, and NO cooking equipment of any kind. Every meal using this access type MUST be no-cook: either ready-to-eat as purchased, or assembled/mixed from pre-cooked, store-bought, or grab-and-go items (e.g. salads, wraps, overnight oats made in a cup/jar, yogurt parfaits, deli meat and cheese plates, fresh fruit, protein bars, pre-cooked rotisserie chicken or similar from a grocery store/deli). The "prep" field may only describe assembling, mixing, slicing, or opening packaging - NEVER cooking, heating on a stove, or baking.`,
+  microwave: `"microwave" - Microwave only (no stove/oven): everything allowed for "hotel" (no-cook/assembly) is fine, PLUS anything that can be prepared using only a microwave - e.g. microwaveable rice/oatmeal cups, steam-in-bag vegetables, reheating pre-cooked proteins, or a mug omelet made with eggs in a microwave-safe mug. The "prep" field may describe microwave heating times (e.g. "Microwave on high for 90 seconds") but must NOT mention a stovetop, oven, grill, or any other cooking appliance.`,
+  airplane_food: `"airplane_food" - Airline-provided meals only: this meal is served on the aircraft or bought at the airport, so there is no meal prep at all. The "description"/"prep"/"tip" fields should focus on how to SELECT or SUPPLEMENT the available airline/airport food (e.g. request the vegetarian/diabetic meal in advance, choose the side salad over fries, skip the bread roll and bring your own nuts or a protein bar to add protein, ask for black coffee instead of a sugary drink). Do NOT invent a from-scratch recipe for this meal.`,
+};
+
+// Builds the explicit per-option prep constraints for the crew's selected
+// kitchen access. Replaces the old plain "Kitchen access: x, y" line, which
+// gave the model no idea what was actually possible with each option.
+function buildKitchenAccessBlock(kitchen) {
+  const list = (kitchen && kitchen.length) ? kitchen : ["full_kitchen"];
+  const rules = list.map((k) => KITCHEN_ACCESS_RULES[k]).filter(Boolean);
+  if (!rules.length) return "";
+
+  let block = `KITCHEN ACCESS CONSTRAINTS - the crew member has access to: ${list.join(", ")}.\n`
+    + rules.map((r) => `- ${r}`).join("\n");
+
+  if (list.length > 1) {
+    block += `\nThis crew member selected MULTIPLE access types because different meals happen in different places during the day/pairing (e.g. breakfast at a hotel with no kitchen, dinner served on the plane). For EACH meal, decide which single access type realistically applies based on its meal type and the day's context (e.g. Dinner on a flying day is likely "airplane_food"; Breakfast or Lunch on the ground is likely "hotel" or "microwave" if listed), then apply ONLY that access type's constraints to that meal's "prep". Do not blend constraints from multiple access types within a single meal.`;
+  }
+
+  return block;
+}
+
 // Builds the shared crew-profile context used by every prompt for a plan.
 function buildContext(data, lang, pairingDays) {
   const langName = lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English";
@@ -257,6 +287,8 @@ function buildContext(data, lang, pairingDays) {
     ? `$${data.budget_amount} per ${data.budget_type === "total" ? `trip (~$${perDayBudget.toFixed(2)}/day across ${pairingDays} days)` : "day"}`
     : "open (no specific limit)";
 
+  const kitchenAccessBlock = buildKitchenAccessBlock(data.kitchen);
+
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}
 - Weight: ${data.weight}, Diet: ${diet}${calorieTarget ? ` | GOAL: Calorie deficit — target ~${calorieTarget} kcal/day total across all meals (for weight loss)` : ""}
@@ -265,9 +297,9 @@ function buildContext(data, lang, pairingDays) {
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
 - Going to USA: ${data.going_usa}
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
-- Kitchen access: ${(data.kitchen || []).join(", ")}`;
+- Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)`;
 
-  return { langName, diet, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget };
+  return { langName, diet, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, kitchenAccessBlock };
 }
 
 function buildDayPrompt(data, dayNum, pairingDays, ctx) {
@@ -275,6 +307,8 @@ function buildDayPrompt(data, dayNum, pairingDays, ctx) {
   return `You are a professional nutritionist specializing in aviation crew health.
 
 ${ctx.profile}
+
+${ctx.kitchenAccessBlock}
 
 Generate ONLY Day ${dayNum} of ${pairingDays} of this nutrition plan. This day's location: ${location}.
 
@@ -300,6 +334,8 @@ function buildExtrasPrompt(data, pairingDays, ctx) {
 
 ${ctx.profile}
 
+${ctx.kitchenAccessBlock}
+
 Daily itinerary:
 ${itinerary}
 
@@ -307,7 +343,7 @@ Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pa
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ""}.
-- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing, based on the crew's kitchen access${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip by choosing cost-effective ingredients and reasonable quantities` : ""}.
+- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing, based on the crew's kitchen access constraints above (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip by choosing cost-effective ingredients and reasonable quantities` : ""}.
 - "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.diet} diet while traveling).`;
 }
 
