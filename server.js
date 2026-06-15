@@ -126,7 +126,6 @@ async function runStructured(prompt, schema, maxTokens) {
   const stream = client.messages.stream({
     model: MODEL,
     max_tokens: maxTokens,
-    thinking: { type: "adaptive" },
     output_config: { format: { type: "json_schema", schema } },
     messages: [{ role: "user", content: prompt }],
   });
