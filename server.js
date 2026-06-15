@@ -8,7 +8,10 @@ app.use(cors());
 app.use(express.json());
 
 const client = new Anthropic();
-const MODEL = "claude-haiku-4-5-20251001";
+const PLAN_MODEL = "claude-sonnet-4-6";
+const FAST_MODEL = "claude-haiku-4-5-20251001";
+
+const CRUD_API_BASE = process.env.CRUD_API_BASE;
 
 const MEAL_SCHEMA = {
   type: "object",
@@ -120,9 +123,34 @@ function handleAnthropicError(err, res) {
   res.status(500).json({ error: err.message });
 }
 
+// Checks the free-tier pairing limit against the user's record in the CRUD backend.
+async function checkPairingUsage(email, name) {
+  const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, name }),
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error("Failed to check pairing usage"), { status: 502 });
+  }
+  return res.json();
+}
+
+async function incrementPairingUsage(email) {
+  const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/increment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error("Failed to record pairing usage"), { status: 502 });
+  }
+  return res.json();
+}
+
 async function runStructured(prompt, schema, maxTokens) {
   const stream = client.messages.stream({
-    model: MODEL,
+    model: PLAN_MODEL,
     max_tokens: maxTokens,
     output_config: { format: { type: "json_schema", schema } },
     messages: [{ role: "user", content: prompt }],
@@ -198,6 +226,18 @@ app.post("/api/generate-plan", async (req, res) => {
     const { data, lang } = req.body;
     if (!data) return res.status(400).json({ error: "Missing 'data' in request body" });
 
+    const email = (data.email || "").toLowerCase().trim();
+    if (!email) return res.status(400).json({ error: "Missing 'email' in request data" });
+
+    const usage = await checkPairingUsage(email, data.name);
+    if (!usage.allowed) {
+      return res.status(403).json({
+        error: "premium_required",
+        message: "You've used all 3 free pairing plans. Upgrade to Premium for unlimited plans.",
+        pairingCount: usage.pairingCount,
+      });
+    }
+
     const pairingDays = data.pairing_days || 1;
     const ctx = buildContext(data, lang);
 
@@ -213,11 +253,15 @@ app.post("/api/generate-plan", async (req, res) => {
       d.totalCalories = d.meals.reduce((sum, m) => sum + m.calories, 0);
     });
 
+    const updatedUsage = await incrementPairingUsage(email);
+
     res.json({
       summary: extras.summary,
       days,
       groceryList: extras.groceryList,
       foodRestrictions: extras.foodRestrictions,
+      pairingCount: updatedUsage.pairingCount,
+      isPremium: updatedUsage.isPremium,
     });
   } catch (err) {
     handleAnthropicError(err, res);
@@ -230,7 +274,7 @@ app.post("/api/estimate-calories", async (req, res) => {
     if (!prompt) return res.status(400).json({ error: "Missing 'prompt' in request body" });
 
     const message = await client.messages.create({
-      model: MODEL,
+      model: FAST_MODEL,
       max_tokens: 1024,
       output_config: { format: { type: "json_schema", schema: CALORIE_SCHEMA } },
       messages: [{ role: "user", content: prompt }],
@@ -252,7 +296,7 @@ app.post("/api/check-airplane-meal", async (req, res) => {
     if (!prompt) return res.status(400).json({ error: "Missing 'prompt' in request body" });
 
     const message = await client.messages.create({
-      model: MODEL,
+      model: FAST_MODEL,
       max_tokens: 1024,
       output_config: { format: { type: "json_schema", schema: AIRPLANE_MEAL_SCHEMA } },
       messages: [{ role: "user", content: prompt }],
