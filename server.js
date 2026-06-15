@@ -223,24 +223,51 @@ async function runStructured(prompt, schema, maxTokens) {
   return extractJSON(message);
 }
 
+// Rough daily calorie target for the "Calorie Deficit" goal. Without height/age
+// a full Mifflin-St Jeor estimate isn't possible, so this uses a commonly-cited
+// ~30 kcal/kg/day maintenance estimate for a moderately active adult (crew are
+// on their feet a lot), minus a standard ~500 kcal/day deficit (~0.5kg/week),
+// floored at a safe minimum.
+function estimateCalorieDeficitTarget(data) {
+  const weightStr = String(data.weight || "");
+  const weightVal = parseFloat(weightStr);
+  if (!weightVal) return null;
+  const weightKg = /lb/i.test(weightStr) ? weightVal / 2.20462 : weightVal;
+  const tdee = weightKg * 30;
+  const floor = data.gender === "male" ? 1500 : 1200;
+  return Math.round(Math.max(tdee - 500, floor) / 50) * 50;
+}
+
 // Builds the shared crew-profile context used by every prompt for a plan.
-function buildContext(data, lang) {
+function buildContext(data, lang, pairingDays) {
   const langName = lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English";
-  const diet = data.diet === "other" ? data.diet_other : data.diet;
+  const diet = data.diet === "other" ? data.diet_other
+    : data.diet === "calorie_deficit" ? "no specific restrictions"
+    : data.diet;
   const jetlag = Math.abs(parseInt(data.timezone || 0, 10)) >= 4;
   const destinations = (data.destinations || []).slice(0, MAX_PAIRING_DAYS);
+  const calorieTarget = data.diet === "calorie_deficit" ? estimateCalorieDeficitTarget(data) : null;
+
+  const budgetAmount = parseFloat(data.budget_amount);
+  const hasBudget = budgetAmount > 0;
+  const perDayBudget = hasBudget
+    ? (data.budget_type === "total" ? budgetAmount / pairingDays : budgetAmount)
+    : null;
+  const budgetLine = hasBudget
+    ? `$${data.budget_amount} per ${data.budget_type === "total" ? `trip (~$${perDayBudget.toFixed(2)}/day across ${pairingDays} days)` : "day"}`
+    : "open (no specific limit)";
 
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}
-- Weight: ${data.weight}, Diet: ${diet}
+- Weight: ${data.weight}, Diet: ${diet}${calorieTarget ? ` | GOAL: Calorie deficit — target ~${calorieTarget} kcal/day total across all meals (for weight loss)` : ""}
 - Goals: ${(data.goals || []).join(", ")}
-- Budget: $${data.budget_amount || "open"} per ${data.budget_type || "day"}
+- Budget: ${budgetLine}
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
 - Going to USA: ${data.going_usa}
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ")}`;
 
-  return { langName, diet, jetlag, destinations, profile };
+  return { langName, diet, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget };
 }
 
 function buildDayPrompt(data, dayNum, pairingDays, ctx) {
@@ -258,7 +285,13 @@ ${ctx.jetlag && dayNum === 1
     ? `Set "jetlagNote" to short, practical meal-timing advice for adjusting to the jet lag described above. Phrase all timing purely in terms of ${location} local time — do NOT state explicit clock-time conversions between time zones (e.g. do not say "X local time is Y time at home") and do NOT describe the trip as "eastward"/"westward" or specify a direction, since these are error-prone.`
     : `Set "jetlagNote" to null.`}
 Every meal must include a "tip" (short practical packing/timing/prep/substitution tip) and a "recyclingTip" (short waste-reduction or recycling/composting tip tailored to a ${ctx.diet} diet).
-Vary the meal choices — pick different recipes, ingredients, and combinations than a typical/generic plan each time, so returning crew members don't get repetitive suggestions.`;
+Vary the meal choices — pick different recipes, ingredients, and combinations than a typical/generic plan each time, so returning crew members don't get repetitive suggestions.
+${ctx.hasBudget
+    ? `Budget constraint: the ingredients for this day's meals combined should realistically cost around $${ctx.perDayBudget.toFixed(2)} (USD-equivalent) or less in a typical grocery store near ${location}. Choose recipes and ingredients accordingly — favor affordable, widely available staples over premium or specialty items when the budget is tight, while still meeting the nutrition goals above.`
+    : ""}
+${ctx.calorieTarget
+    ? `CALORIE DEFICIT GOAL: this crew member is targeting weight loss through a calorie deficit. The SUM of the "calories" field across ALL of today's meals (breakfast + lunch + dinner + snacks combined) MUST add up to approximately ${ctx.calorieTarget} kcal, within +/-100 kcal — noticeably below typical maintenance levels. Prioritize high-protein, high-fiber, high-volume foods to maximize satiety at this calorie level, and do NOT inflate portions/calories above this target.`
+    : ""}`;
 }
 
 function buildExtrasPrompt(data, pairingDays, ctx) {
@@ -273,8 +306,8 @@ ${itinerary}
 Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pairingDays}-day nutrition plan (day-by-day meals are generated separately).
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
-- "summary": 2-sentence overview of the whole plan.
-- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing, based on the crew's kitchen access.
+- "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ""}.
+- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing, based on the crew's kitchen access${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip by choosing cost-effective ingredients and reasonable quantities` : ""}.
 - "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.diet} diet while traveling).`;
 }
 
@@ -300,8 +333,16 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       });
     }
 
+    if (data.diet === "calorie_deficit" && !usage.isPremium) {
+      return res.status(403).json({
+        error: "premium_required",
+        message: "Calorie Deficit plans are a Premium feature. Upgrade to Premium to unlock this and unlimited plans.",
+        pairingCount: usage.pairingCount,
+      });
+    }
+
     const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
-    const ctx = buildContext(data, lang);
+    const ctx = buildContext(data, lang, pairingDays);
 
     const dayPromises = [];
     for (let i = 1; i <= pairingDays; i++) {
