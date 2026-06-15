@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 const client = new Anthropic();
-const MODEL = "claude-opus-4-8";
+const MODEL = "claude-haiku-4-5-20251001";
 
 const MEAL_SCHEMA = {
   type: "object",
@@ -166,7 +166,7 @@ Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 Include Breakfast, Lunch, Dinner, and 1-2 Snacks.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
 ${ctx.jetlag && dayNum === 1
-    ? `Set "jetlagNote" to short, practical meal-timing advice for adjusting to the jet lag described above.`
+    ? `Set "jetlagNote" to short, practical meal-timing advice for adjusting to the jet lag described above. Phrase all timing purely in terms of ${location} local time — do NOT state explicit clock-time conversions between time zones (e.g. do not say "X local time is Y time at home") and do NOT describe the trip as "eastward"/"westward" or specify a direction, since these are error-prone.`
     : `Set "jetlagNote" to null.`}
 Every meal must include a "tip" (short practical packing/timing/prep/substitution tip) and a "recyclingTip" (short waste-reduction or recycling/composting tip tailored to a ${ctx.diet} diet).
 Vary the meal choices — pick different recipes, ingredients, and combinations than a typical/generic plan each time, so returning crew members don't get repetitive suggestions.`;
