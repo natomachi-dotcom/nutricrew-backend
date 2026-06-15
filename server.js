@@ -1,10 +1,39 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import Anthropic from "@anthropic-ai/sdk";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 
 const app = express();
-app.use(cors());
+app.set("trust proxy", 1);
+// contentSecurityPolicy/CORP are tuned off/loosened: this is a JSON API with
+// no HTML to protect, and tightening CORP breaks cross-origin fetch() from
+// the frontend's different Vercel origin.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: "cross-origin" } }));
+
+// Only the deployed frontend (and its Vercel preview deployments) and local
+// dev should be able to call this API from a browser — anyone else embedding
+// these endpoints would be spending our Anthropic budget on their traffic.
+const ALLOWED_ORIGINS = [
+  "https://nutricrew-frontend.vercel.app",
+  "https://nutricrew-frontend-natomachi-dotcoms-projects.vercel.app",
+  "https://nutricrew-frontend-natomachi-dotcom-natomachi-dotcoms-projects.vercel.app",
+];
+const PREVIEW_ORIGIN_REGEX = /^https:\/\/nutricrew-frontend-[a-z0-9]+-natomachi-dotcoms-projects\.vercel\.app$/;
+const LOCALHOST_ORIGIN_REGEX = /^http:\/\/localhost(:\d+)?$/;
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // No Origin header = non-browser request (curl, server-to-server) - allow.
+    if (!origin) return callback(null, true);
+    const allowed = ALLOWED_ORIGINS.includes(origin) || PREVIEW_ORIGIN_REGEX.test(origin) || LOCALHOST_ORIGIN_REGEX.test(origin);
+    // Resolve with `false` (not an error) for disallowed origins: the request
+    // still completes, but without CORS headers, so the browser blocks the
+    // response from being read by that page's JS.
+    callback(null, allowed);
+  },
+}));
 app.use(express.json());
 
 const client = new Anthropic();
@@ -12,6 +41,38 @@ const PLAN_MODEL = "claude-sonnet-4-6";
 const FAST_MODEL = "claude-haiku-4-5-20251001";
 
 const CRUD_API_BASE = process.env.CRUD_API_BASE;
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
+
+// Mirrors the frontend's 1-5 day picker — caps the number of parallel
+// per-day Sonnet calls a single request can trigger.
+const MAX_PAIRING_DAYS = 5;
+// Generous enough for the frontend's templated prompts plus a long
+// free-text description, while blocking grossly oversized input.
+const MAX_PROMPT_LENGTH = 3000;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Baseline abuse protection on every API route, per IP.
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Please try again later." },
+});
+app.use("/api", apiLimiter);
+
+// Plan generation runs several Sonnet calls per request, so it gets a much
+// tighter limit, keyed by the crew member's email rather than just IP
+// (shared IPs shouldn't throttle each other, but one account shouldn't be
+// able to hammer this endpoint regardless of IP).
+const generatePlanLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.body?.data?.email?.toLowerCase().trim() || ipKeyGenerator(req.ip),
+  message: { error: "Too many plan generation requests. Please try again later." },
+});
 
 const MEAL_SCHEMA = {
   type: "object",
@@ -120,14 +181,14 @@ function handleAnthropicError(err, res) {
   if (err instanceof Anthropic.APIError) {
     return res.status(err.status || 500).json({ error: err.message });
   }
-  res.status(500).json({ error: err.message });
+  res.status(500).json({ error: 'Internal server error' });
 }
 
 // Checks the free-tier pairing limit against the user's record in the CRUD backend.
 async function checkPairingUsage(email, name) {
   const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/check`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
     body: JSON.stringify({ email, name }),
   });
   if (!res.ok) {
@@ -139,7 +200,7 @@ async function checkPairingUsage(email, name) {
 async function incrementPairingUsage(email) {
   const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/increment`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
     body: JSON.stringify({ email }),
   });
   if (!res.ok) {
@@ -167,7 +228,7 @@ function buildContext(data, lang) {
   const langName = lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English";
   const diet = data.diet === "other" ? data.diet_other : data.diet;
   const jetlag = Math.abs(parseInt(data.timezone || 0, 10)) >= 4;
-  const destinations = data.destinations || [];
+  const destinations = (data.destinations || []).slice(0, MAX_PAIRING_DAYS);
 
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}
@@ -221,13 +282,14 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "NutriCrew AI backend is running" });
 });
 
-app.post("/api/generate-plan", async (req, res) => {
+app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   try {
     const { data, lang } = req.body;
     if (!data) return res.status(400).json({ error: "Missing 'data' in request body" });
 
     const email = (data.email || "").toLowerCase().trim();
     if (!email) return res.status(400).json({ error: "Missing 'email' in request data" });
+    if (!EMAIL_REGEX.test(email)) return res.status(400).json({ error: "Invalid 'email' format" });
 
     const usage = await checkPairingUsage(email, data.name);
     if (!usage.allowed) {
@@ -238,7 +300,7 @@ app.post("/api/generate-plan", async (req, res) => {
       });
     }
 
-    const pairingDays = data.pairing_days || 1;
+    const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
     const ctx = buildContext(data, lang);
 
     const dayPromises = [];
@@ -272,6 +334,9 @@ app.post("/api/estimate-calories", async (req, res) => {
   try {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: "Missing 'prompt' in request body" });
+    if (typeof prompt !== "string" || prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ error: "'prompt' is invalid or too long" });
+    }
 
     const message = await client.messages.create({
       model: FAST_MODEL,
@@ -294,6 +359,9 @@ app.post("/api/check-airplane-meal", async (req, res) => {
   try {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: "Missing 'prompt' in request body" });
+    if (typeof prompt !== "string" || prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ error: "'prompt' is invalid or too long" });
+    }
 
     const message = await client.messages.create({
       model: FAST_MODEL,
@@ -310,6 +378,26 @@ app.post("/api/check-airplane-meal", async (req, res) => {
   } catch (err) {
     handleAnthropicError(err, res);
   }
+});
+
+// --- Error handling ---
+
+app.use((req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
+// Catches malformed JSON bodies and anything else that escapes a route's own
+// try/catch, so Express's default handler (which can include stack traces
+// when NODE_ENV isn't "production") never sends raw error details to clients.
+app.use((err, req, res, next) => {
+  if (err.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "Invalid JSON in request body" });
+  }
+  if (err.type === "entity.too.large") {
+    return res.status(413).json({ error: "Request body too large" });
+  }
+  console.error(err);
+  res.status(500).json({ error: "Internal server error" });
 });
 
 if (!process.env.VERCEL) {
