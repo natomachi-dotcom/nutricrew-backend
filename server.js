@@ -233,7 +233,7 @@ app.post("/api/generate-plan", async (req, res) => {
     if (!usage.allowed) {
       return res.status(403).json({
         error: "premium_required",
-        message: "You've used all 3 free pairing plans. Upgrade to Premium for unlimited plans.",
+        message: "You've used your free pairing plan. Upgrade to Premium for unlimited plans.",
         pairingCount: usage.pairingCount,
       });
     }
