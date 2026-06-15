@@ -32,13 +32,11 @@ const MEAL_SCHEMA = {
 const DAY_SCHEMA = {
   type: "object",
   properties: {
-    day: { type: "integer" },
     label: { type: "string" },
     jetlagNote: { type: ["string", "null"] },
-    totalCalories: { type: "integer" },
     meals: { type: "array", items: MEAL_SCHEMA },
   },
-  required: ["day", "label", "jetlagNote", "totalCalories", "meals"],
+  required: ["label", "jetlagNote", "meals"],
   additionalProperties: false,
 };
 
@@ -165,7 +163,7 @@ ${ctx.profile}
 Generate ONLY Day ${dayNum} of ${pairingDays} of this nutrition plan. This day's location: ${location}.
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
-Include Breakfast, Lunch, Dinner, and 1-2 Snacks. The "day" field must be ${dayNum}.
+Include Breakfast, Lunch, Dinner, and 1-2 Snacks.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
 ${ctx.jetlag && dayNum === 1
     ? `Set "jetlagNote" to short, practical meal-timing advice for adjusting to the jet lag described above.`
@@ -210,7 +208,10 @@ app.post("/api/generate-plan", async (req, res) => {
     const extrasPromise = runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 4000);
 
     const [days, extras] = await Promise.all([Promise.all(dayPromises), extrasPromise]);
-    days.forEach((d, i) => { d.day = i + 1; });
+    days.forEach((d, i) => {
+      d.day = i + 1;
+      d.totalCalories = d.meals.reduce((sum, m) => sum + m.calories, 0);
+    });
 
     res.json({
       summary: extras.summary,
