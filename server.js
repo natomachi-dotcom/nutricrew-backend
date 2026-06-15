@@ -276,7 +276,14 @@ function buildContext(data, lang, pairingDays) {
     : data.diet;
   const jetlag = Math.abs(parseInt(data.timezone || 0, 10)) >= 4;
   const destinations = (data.destinations || []).slice(0, MAX_PAIRING_DAYS);
-  const calorieTarget = data.diet === "calorie_deficit" ? estimateCalorieDeficitTarget(data) : null;
+  // Prefer the user-selected calorie target sent from the frontend;
+  // fall back to the server-side weight estimate for backwards compat.
+  const calorieTarget = data.diet === "calorie_deficit"
+    ? (data.calorie_target || estimateCalorieDeficitTarget(data))
+    : null;
+  const calorieDeficitAmount = data.diet === "calorie_deficit"
+    ? (data.calorie_deficit_amount || null)
+    : null;
 
   const budgetAmount = parseFloat(data.budget_amount);
   const hasBudget = budgetAmount > 0;
@@ -291,7 +298,7 @@ function buildContext(data, lang, pairingDays) {
 
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}
-- Weight: ${data.weight}, Diet: ${diet}${calorieTarget ? ` | GOAL: Calorie deficit — target ~${calorieTarget} kcal/day total across all meals (for weight loss)` : ""}
+- Weight: ${data.weight}, Diet: ${diet}${calorieTarget ? ` | GOAL: Calorie deficit — target exactly ${calorieTarget} kcal/day` : ""}
 - Goals: ${(data.goals || []).join(", ")}
 - Budget: ${budgetLine}
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
@@ -299,7 +306,7 @@ function buildContext(data, lang, pairingDays) {
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)`;
 
-  return { langName, diet, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, kitchenAccessBlock };
+  return { langName, diet, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, kitchenAccessBlock };
 }
 
 function buildDayPrompt(data, dayNum, pairingDays, ctx) {
@@ -323,8 +330,12 @@ Vary the meal choices — pick different recipes, ingredients, and combinations 
 ${ctx.hasBudget
     ? `Budget constraint: the ingredients for this day's meals combined should realistically cost around $${ctx.perDayBudget.toFixed(2)} (USD-equivalent) or less in a typical grocery store near ${location}. Choose recipes and ingredients accordingly — favor affordable, widely available staples over premium or specialty items when the budget is tight, while still meeting the nutrition goals above.`
     : ""}
-${ctx.calorieTarget
-    ? `CALORIE DEFICIT GOAL: this crew member is targeting weight loss through a calorie deficit. The SUM of the "calories" field across ALL of today's meals (breakfast + lunch + dinner + snacks combined) MUST add up to approximately ${ctx.calorieTarget} kcal, within +/-100 kcal — noticeably below typical maintenance levels. Prioritize high-protein, high-fiber, high-volume foods to maximize satiety at this calorie level, and do NOT inflate portions/calories above this target.`
+${ctx.calorieTarget ? `CALORIE DEFICIT GOAL: this crew member is targeting a calorie deficit for weight loss.
+- Daily calorie target: ${ctx.calorieTarget} kcal
+${ctx.calorieDeficitAmount ? `- Deficit goal: ${ctx.calorieDeficitAmount} kcal below maintenance (~${(ctx.calorieDeficitAmount / 7700 * 7).toFixed(2)} kg/week loss pace)` : ""}
+- The SUM of the "calories" field across ALL meals today (Breakfast + Lunch + Dinner + Snacks combined) MUST total as close to ${ctx.calorieTarget} kcal as possible — within ±50 kcal. Do NOT exceed this target.
+- Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods to maximize satiety (especially important for crew managing energy across long pairings).
+- Each meal's "calories" value must be realistic and accurate — individual meal values must sum to approximately ${ctx.calorieTarget} kcal for the day.`
     : ""}`;
 }
 
