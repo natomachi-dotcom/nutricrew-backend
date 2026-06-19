@@ -134,8 +134,9 @@ const MEAL_SCHEMA = {
     tags: { type: "array", items: { type: "string" } },
     tip: { type: "string" },
     recyclingTip: { type: "string" },
+    emoji: { type: "string" },
   },
-  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tags", "tip", "recyclingTip"],
+  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tags", "tip", "recyclingTip", "emoji"],
   additionalProperties: false,
 };
 
@@ -445,17 +446,18 @@ async function runStructured(prompt, schema, maxTokens, model = PLAN_MODEL) {
   return extractJSON(message);
 }
 
-// Rough daily calorie target for the "Calorie Deficit" goal. Without height/age
-// a full Mifflin-St Jeor estimate isn't possible, so this uses a commonly-cited
-// ~30 kcal/kg/day maintenance estimate for a moderately active adult (crew are
-// on their feet a lot), minus a standard ~500 kcal/day deficit (~0.5kg/week),
-// floored at a safe minimum.
+// Mifflin-St Jeor TDEE estimate for calorie deficit target.
+// Uses actual age if provided, defaults to 35. Height defaults to 170 cm.
 function estimateCalorieDeficitTarget(data) {
   const weightStr = String(data.weight || "");
   const weightVal = parseFloat(weightStr);
   if (!weightVal) return null;
   const weightKg = /lb/i.test(weightStr) ? weightVal / 2.20462 : weightVal;
-  const tdee = weightKg * 30;
+  const age = parseInt(data.age || 35, 10);
+  const bmr = data.gender === "male"
+    ? (10 * weightKg) + (6.25 * 170) - (5 * age) + 5
+    : (10 * weightKg) + (6.25 * 170) - (5 * age) - 161;
+  const tdee = bmr * 1.55;
   const floor = data.gender === "male" ? 1500 : 1200;
   return Math.round(Math.max(tdee - 500, floor) / 50) * 50;
 }
@@ -481,126 +483,128 @@ function buildKitchenAccessBlock(kitchen) {
   return block;
 }
 
-// Returns a strict rule block for the given diet key, injected verbatim into
-// every day prompt and the extras prompt so the model can't miss it.
-function getDietRules(rawDiet, calorieTarget) {
-  const FOOTER = `\nCRITICAL: Check every ingredient against the rules above before finalizing each meal. Replace any violating item. Full compliance required — no partial exceptions.`;
-
-  let block = "";
-
-  switch (rawDiet) {
+// Returns the rule block for a single diet key.
+function getSingleDietBlock(diet, calorieTarget) {
+  switch (diet) {
     case "none":
-      block = `DIET: No restrictions. Aim for balanced meals with proteins, complex carbs, healthy fats, and vegetables.`;
-      break;
-
+      return `DIET: No restrictions. Aim for balanced meals with proteins, complex carbs, healthy fats, and vegetables.`;
     case "vegetarian":
-      block = `DIET: VEGETARIAN — STRICT RULES:
+      return `DIET: VEGETARIAN — STRICT RULES:
 - NO meat (any animal flesh) or fish/seafood.
 - Eggs + dairy (cheese, milk, yogurt, butter) ARE allowed.
 - Protein must come from: eggs, dairy, legumes, tofu, tempeh, seitan, nuts, seeds, or quinoa/edamame.
 - If meal protein <15g, suggest a fix in the "tip" field.`;
-      break;
-
     case "vegan":
-      block = `DIET: VEGAN — STRICT RULES:
+      return `DIET: VEGAN — STRICT RULES:
 - NO animal products: no meat, fish, eggs, dairy, honey, gelatin, or whey.
 - Every ingredient must be 100% plant-based. Watch for hidden animal products: use plant butter/coconut oil not butter; dairy-free dark chocolate not regular; vegan dressing not Caesar; egg-free pasta; dairy-free bread.
 - Protein must come from: legumes, tofu, tempeh, seitan, edamame, nuts, seeds, nutritional yeast.
 - Grocery "dairy" list: plant-based alternatives only (oat milk, coconut yogurt, vegan cheese) — no actual dairy.
 - If meal protein <15g, suggest a plant-protein fix in the "tip" field.`;
-      break;
-
     case "gluten_free":
-      block = `DIET: GLUTEN-FREE (celiac-level) — STRICT RULES:
+      return `DIET: GLUTEN-FREE (celiac-level) — STRICT RULES:
 - NO wheat, barley, rye, spelt, regular oats, regular bread/pasta/flour tortillas/crackers/baked goods, soy sauce (use gluten-free tamari), or beer.
 - YES: rice, quinoa, corn, potatoes, GF-certified oats, buckwheat, millet, lentils, all proteins, all veg/fruit.
 - Always label packaged items as "gluten-free" (e.g. "gluten-free tamari", "gluten-free oats").
 - Add a cross-contamination warning in the "tip" for any packaged/restaurant item.`;
-      break;
-
     case "halal":
-      block = `DIET: HALAL — STRICT RULES:
+      return `DIET: HALAL — STRICT RULES:
 - NO pork or pork-derived products (no bacon, ham, lard, pork gelatin).
 - NO alcohol in any form (no wine sauces, beer, cooking wine, alcohol-based vanilla — use alcohol-free vanilla).
 - All meat/poultry must be labeled "halal-certified".
 - Seafood is permissible.
 - Add a tip to verify halal certification at restaurants/stores, and a layover tip on finding halal options.`;
-      break;
-
     case "kosher":
-      block = `DIET: KOSHER — STRICT RULES:
+      return `DIET: KOSHER — STRICT RULES:
 - NO pork. NO shellfish (shrimp, crab, lobster, clams, mussels, oysters, squid).
 - NO meat + dairy in the same meal (keep them fully separate).
 - All meat must be labeled "kosher-certified". Fish: fins + scales only (salmon, tuna, cod, tilapia OK; catfish, shark NOT OK).
 - Prefer pareve meals (fish/eggs/veg/grains) for travel simplicity.
 - Add a hechsher tip for restaurant meals.`;
-      break;
-
     case "low_carb":
-      block = `DIET: LOW-CARB — STRICT RULES:
+      return `DIET: LOW-CARB — STRICT RULES:
 - MAX 50g total carbs/day across all meals combined. Add "~Xg carbs" tag to every meal.
 - NO bread, pasta, rice, potatoes, sugar, most fruit (berries ≤50g OK), corn, juice, sweetened drinks.
 - YES: all proteins, non-starchy veg (greens, broccoli, cauliflower, zucchini, peppers), cheese, nuts, seeds, avocado, olive oil.
 - Make up calories from protein and fat. Verify total daily carbs ≤50g.`;
-      break;
-
     case "dairy_free":
-      block = `DIET: DAIRY-FREE — STRICT RULES:
+      return `DIET: DAIRY-FREE — STRICT RULES:
 - NO dairy: no milk, cheese, butter, cream, yogurt, whey, casein, ghee, or lactose.
 - Watch for hidden dairy: use dairy-free dark chocolate, coconut/oat cream for sauces.
 - Name the dairy-free alternative explicitly (e.g. "oat milk latte" not "latte", "coconut yogurt" not "yogurt").
 - Grocery "dairy" list: dairy-free alternatives only — no actual dairy.`;
-      break;
-
     case "mediterranean":
-      block = `DIET: MEDITERRANEAN — STRICT RULES:
+      return `DIET: MEDITERRANEAN — STRICT RULES:
 - Primary fat: extra-virgin olive oil only (not butter, not vegetable/canola oil).
 - At least 1 fish/seafood meal per day (salmon, sardines, tuna, mackerel, shrimp, etc.).
 - Poultry max 2–3×/week; red meat at most once per pairing.
 - Dairy in moderation: small amounts of Greek yogurt, feta, Parmesan OK.
 - NO ultra-processed foods or fast food. No wine (aviation crew).`;
-      break;
-
     case "carnivore":
-      block = `DIET: CARNIVORE — STRICT RULES:
+      return `DIET: CARNIVORE — STRICT RULES:
 - ONLY animal products: meat, fish, eggs, butter/tallow/lard/ghee.
 - Include organ meat (liver, heart) at least once per pairing.
 - ZERO plant ingredients: no veg, fruit, grains, legumes, nuts, seeds, sugar, or plant oils.
 - Dairy optional: full-fat only (butter, heavy cream, hard cheese). Add tip that some carnivores exclude dairy.
 - Include an electrolyte tip (bone broth, salt, sugar-free electrolytes) in at least one meal.
 - Grocery produce + pantry categories: empty (carnivore only — no plant items).`;
-      break;
-
     case "calorie_deficit":
-      block = `DIET: CALORIE DEFICIT — see CALORIE DEFICIT GOAL below for daily kcal target.
+      return `DIET: CALORIE DEFICIT — see CALORIE DEFICIT GOAL below for daily kcal target.
 - No food-type restrictions. Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods for satiety.${calorieTarget ? `\n- Daily target: ${calorieTarget} kcal — meal calories must sum to ±50 kcal of this.` : ""}`;
-      break;
-
     case "other":
-      block = `DIET: Custom (see Diet field in CREW PROFILE above). Follow stated preferences closely; when in doubt, avoid anything that might conflict.`;
-      break;
-
+      return `DIET: Custom (see Diet field in CREW PROFILE above). Follow stated preferences closely; when in doubt, avoid anything that might conflict.`;
     default:
-      block = `DIET: No restrictions. Balanced, nutritious meals with variety.`;
+      return `DIET: No restrictions. Balanced, nutritious meals with variety.`;
+  }
+}
+
+// Accepts a single diet string or an array of diets (multi-select).
+function getDietRules(rawDiet, calorieTarget) {
+  const FOOTER = `\nCRITICAL: Check every ingredient against the rules above before finalizing each meal. Replace any violating item. Full compliance required — no partial exceptions.`;
+
+  const diets = Array.isArray(rawDiet) ? rawDiet : (rawDiet ? [rawDiet] : []);
+  const filtered = diets.filter(d => d && d !== "none");
+
+  if (filtered.length === 0) {
+    return `DIET: No restrictions. Aim for balanced meals with proteins, complex carbs, healthy fats, and vegetables.` + FOOTER;
   }
 
-  return block + FOOTER;
+  if (filtered.length === 1) {
+    return getSingleDietBlock(filtered[0], calorieTarget) + FOOTER;
+  }
+
+  const blocks = filtered.map(d => getSingleDietBlock(d, calorieTarget)).join("\n\n");
+  return `COMBINED DIET — user follows ALL of these simultaneously. Apply ALL rules from every diet listed below:
+
+${blocks}
+
+COMBINED COMPLIANCE: Where rules conflict, apply the MOST RESTRICTIVE. If one diet allows dairy but another forbids it, exclude dairy entirely. Every single meal must satisfy every selected diet.` + FOOTER;
 }
 
 // Builds the shared crew-profile context used by every prompt for a plan.
 function buildContext(data, lang, pairingDays) {
   const langName = lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English";
-  const diet = data.diet === "other" ? data.diet_other
-    : data.diet === "calorie_deficit" ? "no specific restrictions"
-    : data.diet;
+
+  // Support both new multi-select (data.diets array) and legacy single (data.diet string).
+  const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : ["none"]);
+  const filtered = rawDiets.filter(d => d && d !== "none");
+  const hasCalorieDeficit = filtered.includes("calorie_deficit");
+
+  const dietLabel = filtered.length === 0 ? "no restrictions"
+    : filtered.map(d => {
+        if (d === "other") return data.diet_other || "custom diet";
+        if (d === "calorie_deficit") return "calorie deficit";
+        return d.replace(/_/g, " ");
+      }).join(" + ");
+
   const jetlag = Math.abs(parseInt(data.timezone || 0, 10)) >= 4;
   const destinations = (data.destinations || []).slice(0, MAX_PAIRING_DAYS);
   // Prefer the user-selected calorie target sent from the frontend;
-  // fall back to the server-side weight estimate for backwards compat.
-  const calorieTarget = data.diet === "calorie_deficit"
+  // fall back to the server-side weight+age estimate for backwards compat.
+  const calorieTarget = hasCalorieDeficit
     ? (data.calorie_target || estimateCalorieDeficitTarget(data))
     : null;
-  const calorieDeficitAmount = data.diet === "calorie_deficit"
+  const calorieDeficitAmount = hasCalorieDeficit
     ? (data.calorie_deficit_amount || null)
     : null;
 
@@ -614,11 +618,12 @@ function buildContext(data, lang, pairingDays) {
     : "open (no specific limit)";
 
   const kitchenAccessBlock = buildKitchenAccessBlock(data.kitchen);
-  const dietRules = getDietRules(data.diet, calorieTarget);
+  const dietRules = getDietRules(rawDiets, calorieTarget);
 
+  const ageStr = data.age ? `, Age: ${data.age}` : "";
   const profile = `CREW PROFILE:
-- Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}
-- Weight: ${data.weight}, Diet: ${diet}${calorieTarget ? ` | GOAL: Calorie deficit — target exactly ${calorieTarget} kcal/day` : ""}
+- Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}${ageStr}
+- Weight: ${data.weight}, Diet: ${dietLabel}${calorieTarget ? ` | GOAL: Calorie deficit — target exactly ${calorieTarget} kcal/day` : ""}
 - Goals: ${(data.goals || []).join(", ")}
 - Budget: ${budgetLine}
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
@@ -626,7 +631,7 @@ function buildContext(data, lang, pairingDays) {
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)`;
 
-  return { langName, diet, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, kitchenAccessBlock, dietRules };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, kitchenAccessBlock, dietRules };
 }
 
 function buildDayPrompt(data, dayNum, pairingDays, ctx) {
@@ -647,7 +652,7 @@ The meal "type" field must always be the literal English word "Breakfast", "Lunc
 ${ctx.jetlag && dayNum === 1
     ? `Set "jetlagNote" to short, practical meal-timing advice for adjusting to the jet lag described above. Phrase all timing purely in terms of ${location} local time — do NOT state explicit clock-time conversions between time zones (e.g. do not say "X local time is Y time at home") and do NOT describe the trip as "eastward"/"westward" or specify a direction, since these are error-prone.`
     : `Set "jetlagNote" to null.`}
-Every meal must include a "tip" (short practical packing/timing/prep/substitution tip) and a "recyclingTip" (short waste-reduction or recycling/composting tip tailored to a ${ctx.diet} diet).
+Every meal must include a "tip" (short practical packing/timing/prep/substitution tip), a "recyclingTip" (short waste-reduction or recycling/composting tip tailored to a ${ctx.dietLabel} diet), and an "emoji" field with 2–3 food emoji that visually represent this specific meal (e.g. "🥩🧄🫒" for garlic butter steak, "🥗🍋🫒" for Greek salad — make them accurate and appetizing).
 Vary the meal choices — pick different recipes, ingredients, and combinations than a typical/generic plan each time, so returning crew members don't get repetitive suggestions.
 ${ctx.hasBudget
     ? `Budget constraint: the ingredients for this day's meals combined should realistically cost around $${ctx.perDayBudget.toFixed(2)} (USD-equivalent) or less in a typical grocery store near ${location}. Choose recipes and ingredients accordingly — favor affordable, widely available staples over premium or specialty items when the budget is tight, while still meeting the nutrition goals above.`
@@ -679,7 +684,7 @@ Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pa
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ""}.
 - "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
-- "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.diet} diet while traveling).`;
+- "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
 }
 
 app.get("/", (req, res) => {
@@ -704,7 +709,8 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       });
     }
 
-    if (data.diet === "calorie_deficit" && !usage.isPremium) {
+    const reqDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
+    if (reqDiets.includes("calorie_deficit") && !usage.isPremium) {
       return res.status(403).json({
         error: "premium_required",
         message: "Calorie Deficit plans are a Premium feature. Upgrade to Premium to unlock this and unlimited plans.",
