@@ -145,6 +145,7 @@ const MEAL_SCHEMA = {
     tip: { type: "string" },
     recyclingTip: { type: "string" },
     emoji: { type: "string" },
+    container: { type: "string", description: "Recommended Tupperware/container size and shape for packing this meal, e.g. '500ml rectangular container' or '300ml round container with dividers'. Only include if a lunch bag size was provided." },
   },
   required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tags", "tip", "recyclingTip", "emoji"],
   additionalProperties: false,
@@ -682,6 +683,9 @@ function buildContext(data, lang, pairingDays) {
     : gainTarget
     ? ` | GOAL: Weight gain — target exactly ${gainTarget} kcal/day`
     : "";
+  const lunchBagMap = { small: "Small (~4L, fits 1–2 containers)", medium: "Medium (~6L, fits 2–3 containers)", large: "Large (~10L, fits 3–4 containers + extras)" };
+  const lunchBag = data.lunch_bag ? lunchBagMap[data.lunch_bag] || data.lunch_bag : null;
+
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}${ageStr}
 - Weight: ${data.weight}, Diet: ${dietLabel}${goalNote}
@@ -690,9 +694,9 @@ function buildContext(data, lang, pairingDays) {
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
 - Going to USA: ${data.going_usa}
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
-- Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)`;
+- Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}`;
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules, lunchBag };
 }
 
 function buildAllDaysPrompt(data, pairingDays, ctx) {
@@ -721,7 +725,7 @@ Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 Each day: include Breakfast, Lunch, Dinner, and 1-2 Snacks.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
-Every meal must include a "tip", a "recyclingTip" (waste-reduction tip for a ${ctx.dietLabel} diet), and an "emoji" field with 2–3 food emoji accurately representing the meal.
+Every meal must include a "tip", a "recyclingTip" (waste-reduction tip for a ${ctx.dietLabel} diet), and an "emoji" field with 2–3 food emoji accurately representing the meal.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}
 Vary meal choices across all days — different recipes, ingredients, and combinations each day.
 
 Per-day instructions:
