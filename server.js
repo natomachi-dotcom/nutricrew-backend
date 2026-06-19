@@ -448,7 +448,7 @@ async function runStructured(prompt, schema, maxTokens, model = PLAN_MODEL) {
 
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
 // Uses actual age if provided, defaults to 35. Height defaults to 170 cm.
-function estimateCalorieDeficitTarget(data) {
+function estimateTDEE(data) {
   const weightStr = String(data.weight || "");
   const weightVal = parseFloat(weightStr);
   if (!weightVal) return null;
@@ -457,9 +457,20 @@ function estimateCalorieDeficitTarget(data) {
   const bmr = data.gender === "male"
     ? (10 * weightKg) + (6.25 * 170) - (5 * age) + 5
     : (10 * weightKg) + (6.25 * 170) - (5 * age) - 161;
-  const tdee = bmr * 1.55;
+  return bmr * 1.55;
+}
+
+function estimateCalorieDeficitTarget(data) {
+  const tdee = estimateTDEE(data);
+  if (!tdee) return null;
   const floor = data.gender === "male" ? 1500 : 1200;
   return Math.round(Math.max(tdee - 500, floor) / 50) * 50;
+}
+
+function estimateGainTarget(data) {
+  const tdee = estimateTDEE(data);
+  if (!tdee) return null;
+  return Math.round((tdee + 400) / 50) * 50;
 }
 
 const KITCHEN_ACCESS_RULES = {
@@ -607,6 +618,9 @@ function buildContext(data, lang, pairingDays) {
   const calorieDeficitAmount = hasCalorieDeficit
     ? (data.calorie_deficit_amount || null)
     : null;
+  const goals = data.goals || [];
+  const hasGainWeight = goals.includes("gain_weight");
+  const gainTarget = hasGainWeight ? estimateGainTarget(data) : null;
 
   const budgetAmount = parseFloat(data.budget_amount);
   const hasBudget = budgetAmount > 0;
@@ -621,17 +635,22 @@ function buildContext(data, lang, pairingDays) {
   const dietRules = getDietRules(rawDiets, calorieTarget);
 
   const ageStr = data.age ? `, Age: ${data.age}` : "";
+  const goalNote = calorieTarget
+    ? ` | GOAL: Calorie deficit — target exactly ${calorieTarget} kcal/day`
+    : gainTarget
+    ? ` | GOAL: Weight gain — target exactly ${gainTarget} kcal/day`
+    : "";
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}${ageStr}
-- Weight: ${data.weight}, Diet: ${dietLabel}${calorieTarget ? ` | GOAL: Calorie deficit — target exactly ${calorieTarget} kcal/day` : ""}
-- Goals: ${(data.goals || []).join(", ")}
+- Weight: ${data.weight}, Diet: ${dietLabel}${goalNote}
+- Goals: ${goals.join(", ") || "none specified"}
 - Budget: ${budgetLine}
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
 - Going to USA: ${data.going_usa}
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)`;
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, kitchenAccessBlock, dietRules };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules };
 }
 
 function buildDayPrompt(data, dayNum, pairingDays, ctx) {
@@ -663,6 +682,14 @@ ${ctx.calorieDeficitAmount ? `- Deficit goal: ${ctx.calorieDeficitAmount} kcal b
 - The SUM of the "calories" field across ALL meals today (Breakfast + Lunch + Dinner + Snacks combined) MUST total as close to ${ctx.calorieTarget} kcal as possible — within ±50 kcal. Do NOT exceed this target.
 - Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods to maximize satiety (especially important for crew managing energy across long pairings).
 - Each meal's "calories" value must be realistic and accurate — individual meal values must sum to approximately ${ctx.calorieTarget} kcal for the day.`
+    : ""}
+${ctx.gainTarget ? `WEIGHT GAIN GOAL: this crew member is actively trying to gain weight/muscle mass.
+- Daily calorie target: ${ctx.gainTarget} kcal (calorie surplus above maintenance to support healthy weight gain)
+- The SUM of the "calories" field across ALL meals today MUST total as close to ${ctx.gainTarget} kcal as possible — within ±75 kcal.
+- Prioritize calorie-dense, protein-rich foods: lean meats, eggs, legumes, nuts, seeds, whole grains, healthy fats (olive oil, avocado, nut butters), starchy vegetables. Larger portions are encouraged.
+- Include 2 snacks minimum — these are critical for hitting the calorie surplus. Make snacks energy-dense (e.g. trail mix, nut butter on rice cakes, protein smoothie ingredients).
+- Avoid low-calorie-density "diet" foods. Every meal should feel satisfying and substantial.
+- Each meal's "calories" value must be realistic and accurate — individual meal values must sum to approximately ${ctx.gainTarget} kcal for the day.`
     : ""}`;
 }
 
@@ -682,7 +709,7 @@ ${itinerary}
 Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pairingDays}-day nutrition plan (day-by-day meals are generated separately).
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
-- "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ""}.
+- "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ctx.gainTarget ? `, noting that it targets a calorie surplus (~${ctx.gainTarget} kcal/day) to support healthy weight and muscle gain` : ""}.
 - "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
 - "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
 }
