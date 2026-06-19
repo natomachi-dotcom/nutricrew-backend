@@ -760,6 +760,52 @@ app.post("/api/check-airplane-meal", async (req, res) => {
   }
 });
 
+// ─── NEARBY PLACES (premium only) ────────────────────────────────────────────
+
+async function fetchPlaces(query) {
+  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&key=${process.env.GOOGLE_PLACES_API_KEY}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Places API error: ${res.status}`);
+  const data = await res.json();
+  return (data.results || []).slice(0, 3).map(p => ({
+    name: p.name,
+    address: p.formatted_address,
+    rating: p.rating ?? null,
+    open_now: p.opening_hours?.open_now ?? null,
+  }));
+}
+
+app.post("/api/places", async (req, res) => {
+  try {
+    const { city, email } = req.body;
+    if (!city || typeof city !== "string" || city.length > 100) {
+      return res.status(400).json({ error: "Missing or invalid 'city'" });
+    }
+    if (!email || !EMAIL_REGEX.test((email || "").toLowerCase().trim())) {
+      return res.status(400).json({ error: "Missing or invalid 'email'" });
+    }
+    if (!process.env.GOOGLE_PLACES_API_KEY) {
+      return res.status(503).json({ error: "Places not configured" });
+    }
+
+    // Verify the user is premium before calling Places API.
+    const usage = await checkPairingUsage(email.toLowerCase().trim(), "");
+    if (!usage.isPremium) {
+      return res.status(403).json({ error: "premium_required" });
+    }
+
+    const [groceries, restaurants] = await Promise.all([
+      fetchPlaces(`grocery store near ${city}`),
+      fetchPlaces(`healthy restaurant near ${city}`),
+    ]);
+
+    res.json({ groceries, restaurants });
+  } catch (err) {
+    console.error("Places error:", err.message);
+    res.status(502).json({ error: "Could not fetch nearby places." });
+  }
+});
+
 // --- Error handling ---
 
 app.use((req, res) => {
