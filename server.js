@@ -723,7 +723,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
     const dayPromises = [];
     for (let i = 1; i <= pairingDays; i++) {
-      dayPromises.push(runStructured(buildDayPrompt(data, i, pairingDays, ctx), DAY_SCHEMA, 1400, FAST_MODEL));
+      dayPromises.push(runStructured(buildDayPrompt(data, i, pairingDays, ctx), DAY_SCHEMA, 1900, FAST_MODEL));
     }
     const extrasPromise = runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000);
 
