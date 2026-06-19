@@ -251,11 +251,11 @@ function handleAnthropicError(err, res) {
 }
 
 // Checks the free-tier pairing limit against the user's record in the CRUD backend.
-async function checkPairingUsage(email, name) {
+async function checkPairingUsage(email, name, clientIP) {
   const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/check`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
-    body: JSON.stringify({ email, name }),
+    body: JSON.stringify({ email, name, clientIP }),
   });
   if (!res.ok) {
     throw Object.assign(new Error("Failed to check pairing usage"), { status: 502 });
@@ -780,7 +780,7 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
     const storeRes = await fetch(`${CRUD_API_BASE}/api/auth/store-otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
-      body: JSON.stringify({ email: email.toLowerCase().trim(), otpHash }),
+      body: JSON.stringify({ email: email.toLowerCase().trim(), otpHash, clientIP: req.ip }),
     });
     if (!storeRes.ok) {
       const err = await storeRes.json().catch(() => ({}));
@@ -815,7 +815,7 @@ app.post("/api/auth/verify-otp", async (req, res) => {
     const checkRes = await fetch(`${CRUD_API_BASE}/api/auth/check-otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
-      body: JSON.stringify({ email: email.toLowerCase().trim(), otpHash }),
+      body: JSON.stringify({ email: email.toLowerCase().trim(), otpHash, clientIP: req.ip }),
     });
     const data = await checkRes.json();
     if (!checkRes.ok) return res.status(checkRes.status).json(data);
@@ -856,7 +856,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     if (!email) return res.status(400).json({ error: "Missing 'email' in request data" });
     if (!EMAIL_REGEX.test(email)) return res.status(400).json({ error: "Invalid 'email' format" });
 
-    const usage = await checkPairingUsage(email, data.name);
+    const usage = await checkPairingUsage(email, data.name, req.ip);
     if (!usage.allowed) {
       return res.status(403).json({
         error: "premium_required",
