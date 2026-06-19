@@ -4,6 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
+import Stripe from "stripe";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 
 const app = express();
@@ -35,6 +36,41 @@ app.use(cors({
     callback(null, allowed);
   },
 }));
+// Stripe webhook MUST be before express.json() — Stripe requires the raw body
+// to verify the signature. Defining the route here ensures Express runs
+// express.raw() on this path before the global express.json() middleware.
+app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
+    return res.status(503).json({ error: "Stripe not configured" });
+  }
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error("Stripe webhook signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const email = session.customer_email || session.metadata?.email;
+    if (email) {
+      try {
+        await fetch(`${CRUD_API_BASE}/api/set-premium`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+          body: JSON.stringify({ email }),
+        });
+      } catch (err) {
+        console.error("Failed to set premium after payment:", err.message);
+      }
+    }
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json());
 
 const client = new Anthropic();
@@ -43,6 +79,9 @@ const FAST_MODEL = "claude-haiku-4-5-20251001";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = process.env.FROM_EMAIL || "NutriCrew <onboarding@resend.dev>";
+
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://nutricrew-frontend.vercel.app";
 
 const CRUD_API_BASE = process.env.CRUD_API_BASE;
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
@@ -757,6 +796,43 @@ app.post("/api/check-airplane-meal", async (req, res) => {
     res.json(extractJSON(message));
   } catch (err) {
     handleAnthropicError(err, res);
+  }
+});
+
+// ─── STRIPE ───────────────────────────────────────────────────────────────────
+
+app.post("/api/create-checkout-session", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !EMAIL_REGEX.test((email || "").toLowerCase().trim())) {
+      return res.status(400).json({ error: "Missing or invalid email" });
+    }
+    if (!stripe) {
+      return res.status(503).json({ error: "Payments not configured" });
+    }
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+      customer_email: email.toLowerCase().trim(),
+      metadata: { email: email.toLowerCase().trim() },
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          unit_amount: 999,
+          product_data: {
+            name: "NutriCrew Premium",
+            description: "Unlimited meal plans, calorie deficit plans & nearby stores/restaurants.",
+          },
+        },
+        quantity: 1,
+      }],
+      success_url: `${FRONTEND_URL}?premium=true`,
+      cancel_url: FRONTEND_URL,
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe checkout error:", err.message);
+    res.status(500).json({ error: "Could not create checkout session." });
   }
 });
 
