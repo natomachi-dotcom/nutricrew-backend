@@ -151,6 +151,15 @@ const DAY_SCHEMA = {
   additionalProperties: false,
 };
 
+const DAYS_SCHEMA = {
+  type: "object",
+  properties: {
+    days: { type: "array", items: DAY_SCHEMA },
+  },
+  required: ["days"],
+  additionalProperties: false,
+};
+
 const EXTRAS_SCHEMA = {
   type: "object",
   properties: {
@@ -653,8 +662,19 @@ function buildContext(data, lang, pairingDays) {
   return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules };
 }
 
-function buildDayPrompt(data, dayNum, pairingDays, ctx) {
-  const location = ctx.destinations[dayNum - 1] || data.departure;
+function buildAllDaysPrompt(data, pairingDays, ctx) {
+  const daySpecs = Array.from({ length: pairingDays }, (_, i) => {
+    const dayNum = i + 1;
+    const loc = ctx.destinations[i] || data.departure;
+    const jetlagInstr = ctx.jetlag && dayNum === 1
+      ? `jetlagNote: short, practical meal-timing advice for adjusting to the jet lag above. Phrase purely in ${loc} local time — no cross-timezone clock conversions, no "eastward"/"westward" direction.`
+      : `jetlagNote: null`;
+    const budgetLine = ctx.hasBudget
+      ? `Budget: ~$${ctx.perDayBudget.toFixed(2)} USD for today's ingredients near ${loc}.`
+      : "";
+    return `Day ${dayNum} — Location: ${loc}. ${budgetLine} ${jetlagInstr}`;
+  }).join("\n");
+
   return `You are a professional nutritionist specializing in aviation crew health.
 
 ${ctx.profile}
@@ -663,34 +683,29 @@ ${ctx.kitchenAccessBlock}
 
 ${ctx.dietRules}
 
-Generate ONLY Day ${dayNum} of ${pairingDays} of this nutrition plan. This day's location: ${location}.
+Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. Return a JSON object with a "days" array of exactly ${pairingDays} day object(s), in order.
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
-Include Breakfast, Lunch, Dinner, and 1-2 Snacks.
+Each day: include Breakfast, Lunch, Dinner, and 1-2 Snacks.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
-${ctx.jetlag && dayNum === 1
-    ? `Set "jetlagNote" to short, practical meal-timing advice for adjusting to the jet lag described above. Phrase all timing purely in terms of ${location} local time — do NOT state explicit clock-time conversions between time zones (e.g. do not say "X local time is Y time at home") and do NOT describe the trip as "eastward"/"westward" or specify a direction, since these are error-prone.`
-    : `Set "jetlagNote" to null.`}
-Every meal must include a "tip" (short practical packing/timing/prep/substitution tip), a "recyclingTip" (short waste-reduction or recycling/composting tip tailored to a ${ctx.dietLabel} diet), and an "emoji" field with 2–3 food emoji that visually represent this specific meal (e.g. "🥩🧄🫒" for garlic butter steak, "🥗🍋🫒" for Greek salad — make them accurate and appetizing).
-Vary the meal choices — pick different recipes, ingredients, and combinations than a typical/generic plan each time, so returning crew members don't get repetitive suggestions.
-${ctx.hasBudget
-    ? `Budget constraint: the ingredients for this day's meals combined should realistically cost around $${ctx.perDayBudget.toFixed(2)} (USD-equivalent) or less in a typical grocery store near ${location}. Choose recipes and ingredients accordingly — favor affordable, widely available staples over premium or specialty items when the budget is tight, while still meeting the nutrition goals above.`
-    : ""}
-${ctx.calorieTarget ? `CALORIE DEFICIT GOAL: this crew member is targeting a calorie deficit for weight loss.
+Every meal must include a "tip", a "recyclingTip" (waste-reduction tip for a ${ctx.dietLabel} diet), and an "emoji" field with 2–3 food emoji accurately representing the meal.
+Vary meal choices across all days — different recipes, ingredients, and combinations each day.
+
+Per-day instructions:
+${daySpecs}
+${ctx.calorieTarget ? `
+CALORIE DEFICIT GOAL: targeting a calorie deficit for weight loss.
 - Daily calorie target: ${ctx.calorieTarget} kcal
-${ctx.calorieDeficitAmount ? `- Deficit goal: ${ctx.calorieDeficitAmount} kcal below maintenance (~${(ctx.calorieDeficitAmount / 7700 * 7).toFixed(2)} kg/week loss pace)` : ""}
-- The SUM of the "calories" field across ALL meals today (Breakfast + Lunch + Dinner + Snacks combined) MUST total as close to ${ctx.calorieTarget} kcal as possible — within ±50 kcal. Do NOT exceed this target.
-- Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods to maximize satiety (especially important for crew managing energy across long pairings).
-- Each meal's "calories" value must be realistic and accurate — individual meal values must sum to approximately ${ctx.calorieTarget} kcal for the day.`
-    : ""}
-${ctx.gainTarget ? `WEIGHT GAIN GOAL: this crew member is actively trying to gain weight/muscle mass.
-- Daily calorie target: ${ctx.gainTarget} kcal (calorie surplus above maintenance to support healthy weight gain)
-- The SUM of the "calories" field across ALL meals today MUST total as close to ${ctx.gainTarget} kcal as possible — within ±75 kcal.
-- Prioritize calorie-dense, protein-rich foods: lean meats, eggs, legumes, nuts, seeds, whole grains, healthy fats (olive oil, avocado, nut butters), starchy vegetables. Larger portions are encouraged.
-- Include 2 snacks minimum — these are critical for hitting the calorie surplus. Make snacks energy-dense (e.g. trail mix, nut butter on rice cakes, protein smoothie ingredients).
-- Avoid low-calorie-density "diet" foods. Every meal should feel satisfying and substantial.
-- Each meal's "calories" value must be realistic and accurate — individual meal values must sum to approximately ${ctx.gainTarget} kcal for the day.`
-    : ""}`;
+${ctx.calorieDeficitAmount ? `- Deficit: ${ctx.calorieDeficitAmount} kcal below maintenance (~${(ctx.calorieDeficitAmount / 7700 * 7).toFixed(2)} kg/week)` : ""}
+- Each day's meal "calories" SUM must be within ±50 kcal of ${ctx.calorieTarget}. Do NOT exceed it.
+- Prioritize high-protein, high-fiber, low-calorie-density foods.` : ""}
+${ctx.gainTarget ? `
+WEIGHT GAIN GOAL: targeting a calorie surplus for weight/muscle gain.
+- Daily calorie target: ${ctx.gainTarget} kcal
+- Each day's meal "calories" SUM must be within ±75 kcal of ${ctx.gainTarget}.
+- Prioritize calorie-dense, protein-rich foods (lean meats, eggs, legumes, nuts, seeds, whole grains, healthy fats). Larger portions encouraged.
+- Include 2 snacks minimum per day (energy-dense: trail mix, nut butter, protein smoothie ingredients).
+- Avoid low-calorie-density "diet" foods.` : ""}`;
 }
 
 function buildExtrasPrompt(data, pairingDays, ctx) {
@@ -748,13 +763,12 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
     const ctx = buildContext(data, lang, pairingDays);
 
-    const dayPromises = [];
-    for (let i = 1; i <= pairingDays; i++) {
-      dayPromises.push(runStructured(buildDayPrompt(data, i, pairingDays, ctx), DAY_SCHEMA, 1900, FAST_MODEL));
-    }
-    const extrasPromise = runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000);
-
-    const [days, extras] = await Promise.all([Promise.all(dayPromises), extrasPromise]);
+    const maxDayTokens = Math.min(2200 * pairingDays, 7500);
+    const [daysResult, extras] = await Promise.all([
+      runStructured(buildAllDaysPrompt(data, pairingDays, ctx), DAYS_SCHEMA, maxDayTokens, FAST_MODEL),
+      runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000),
+    ]);
+    const days = daysResult.days;
     days.forEach((d, i) => {
       d.day = i + 1;
       d.totalCalories = d.meals.reduce((sum, m) => sum + m.calories, 0);
