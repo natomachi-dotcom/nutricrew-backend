@@ -853,6 +853,55 @@ app.post("/api/auth/verify-session", async (req, res) => {
 
 // ─── PLAN GENERATION ──────────────────────────────────────────────────────────
 
+// ── MEAL CACHE HELPERS ────────────────────────────────────────────
+
+function buildCacheKey(data, ctx, lang) {
+  const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
+  const goals = (data.goals || []).slice().sort();
+  const perDay = ctx.perDayBudget;
+  const budgetLevel = !perDay ? "none" : perDay > 50 ? "high" : perDay > 20 ? "medium" : "low";
+  const kitchen = (data.kitchen || []).slice().sort();
+  const ct = ctx.calorieTarget ? String(Math.round(ctx.calorieTarget / 100) * 100) : (ctx.gainTarget ? `gain${Math.round(ctx.gainTarget / 100) * 100}` : "none");
+  return {
+    dietKey: diets.join(",") || "none",
+    goalKey: goals.join(",") || "none",
+    budgetLevel,
+    kitchenKey: kitchen.join(",") || "full_kitchen",
+    calorieTargetKey: ct,
+    lang: lang || "en",
+  };
+}
+
+async function crudInternal(path, body) {
+  const r = await fetch(`${CRUD_API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`CRUD ${path} returned ${r.status}`);
+  return r.json();
+}
+
+async function queryCachedDays(email, cacheKey, count) {
+  try {
+    return await crudInternal("/api/meal-cache/query", { email, ...cacheKey, count });
+  } catch { return { days: [], total: 0 }; }
+}
+
+async function storeCachedDays(days, cacheKey) {
+  try {
+    return await crudInternal("/api/meal-cache/store", { days, ...cacheKey });
+  } catch (e) { console.error("meal-cache/store failed:", e.message); return { ids: [] }; }
+}
+
+async function markDaysSeen(email, dayIds) {
+  if (!dayIds || dayIds.length === 0) return;
+  try { await crudInternal("/api/meal-cache/mark-seen", { email, dayIds }); }
+  catch (e) { console.error("meal-cache/mark-seen failed:", e.message); }
+}
+
+// ─────────────────────────────────────────────────────────────────
+
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   try {
     const { data, lang } = req.body;
@@ -882,17 +931,69 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
     const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
     const ctx = buildContext(data, lang, pairingDays);
+    const cacheKey = buildCacheKey(data, ctx, lang);
 
-    const maxDayTokens = Math.min(2200 * pairingDays, 7500);
-    const [daysResult, extras] = await Promise.all([
-      runStructured(buildAllDaysPrompt(data, pairingDays, ctx), DAYS_SCHEMA, maxDayTokens, FAST_MODEL),
-      runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000),
-    ]);
-    const days = daysResult.days;
-    days.forEach((d, i) => {
-      d.day = i + 1;
-      d.totalCalories = d.meals.reduce((sum, m) => sum + m.calories, 0);
-    });
+    // Try to serve all days from cache (user-unseen meals from the shared DB)
+    const { days: cachedDays } = await queryCachedDays(email, cacheKey, pairingDays);
+    const cachedDayIds = cachedDays.map(d => d._id);
+
+    let days;
+    let newDayIds = [];
+
+    if (cachedDays.length >= pairingDays) {
+      // Full cache hit — no DAYS API call needed
+      days = cachedDays.slice(0, pairingDays).map((d, i) => ({
+        day: i + 1,
+        label: `Day ${i + 1}`,
+        jetlagNote: null,
+        meals: d.meals,
+        totalCalories: d.totalCalories,
+      }));
+      console.log(`[meal-cache] HIT for ${email}: served ${pairingDays} day(s) from cache`);
+    } else {
+      // Partial or full cache miss — generate with AI
+      const missing = pairingDays - cachedDays.length;
+      const maxDayTokens = Math.min(2200 * missing, 7500);
+
+      // Build a partial prompt for only the missing days
+      const missingData = { ...data, pairing_days: missing };
+      const missingCtx = buildContext(missingData, lang, missing);
+      const daysResult = await runStructured(
+        buildAllDaysPrompt(missingData, missing, missingCtx),
+        DAYS_SCHEMA, maxDayTokens, FAST_MODEL
+      );
+
+      const aiDays = daysResult.days.map(d => ({
+        meals: d.meals,
+        totalCalories: d.meals.reduce((s, m) => s + m.calories, 0),
+        label: d.label,
+        jetlagNote: d.jetlagNote,
+      }));
+
+      // Store newly generated days in the shared cache
+      const stored = await storeCachedDays(aiDays, cacheKey);
+      newDayIds = stored.ids || [];
+
+      // Compose: cached days first, then fresh AI days
+      const allDays = [
+        ...cachedDays.map(d => ({ meals: d.meals, totalCalories: d.totalCalories, label: null, jetlagNote: null })),
+        ...aiDays,
+      ];
+      days = allDays.slice(0, pairingDays).map((d, i) => ({
+        day: i + 1,
+        label: d.label || `Day ${i + 1}`,
+        jetlagNote: d.jetlagNote ?? null,
+        meals: d.meals,
+        totalCalories: d.totalCalories,
+      }));
+      console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${cachedDays.length} from cache`);
+    }
+
+    // Always generate extras (grocery list, restrictions, summary) — these are personalized
+    const extras = await runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000);
+
+    // Mark all days as seen for this user (cached + newly stored)
+    markDaysSeen(email, [...cachedDayIds, ...newDayIds]);
 
     const updatedUsage = await incrementPairingUsage(email);
 
@@ -905,7 +1006,6 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       isPremium: updatedUsage.isPremium,
     };
 
-    // Send plan email — failure is non-fatal, plan is returned regardless.
     sendPlanEmail(email, data.name, lang || "en", planResponse).catch(err =>
       console.error("Plan email failed:", err.message)
     );
