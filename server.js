@@ -212,9 +212,9 @@ async function incrementPairingUsage(email) {
   return res.json();
 }
 
-async function runStructured(prompt, schema, maxTokens) {
+async function runStructured(prompt, schema, maxTokens, model = PLAN_MODEL) {
   const stream = client.messages.stream({
-    model: PLAN_MODEL,
+    model,
     max_tokens: maxTokens,
     output_config: { format: { type: "json_schema", schema } },
     messages: [{ role: "user", content: prompt }],
@@ -241,28 +241,22 @@ function estimateCalorieDeficitTarget(data) {
   return Math.round(Math.max(tdee - 500, floor) / 50) * 50;
 }
 
-// What's actually possible to prepare under each kitchen-access option.
-// Keyed by the values the frontend's kitchen CheckGroup sends.
 const KITCHEN_ACCESS_RULES = {
-  full_kitchen: `"full_kitchen" - Full kitchen access: stove, oven, fridge/freezer, and standard cookware are all available. Normal home cooking (sauteing, baking, roasting, simmering, grilling, etc.) is fine with no special constraints.`,
-  hotel: `"hotel" - Hotel room with NO kitchen: there is NO stove, NO oven, and NO cooking equipment of any kind. Every meal using this access type MUST be no-cook: either ready-to-eat as purchased, or assembled/mixed from pre-cooked, store-bought, or grab-and-go items (e.g. salads, wraps, overnight oats made in a cup/jar, yogurt parfaits, deli meat and cheese plates, fresh fruit, protein bars, pre-cooked rotisserie chicken or similar from a grocery store/deli). The "prep" field may only describe assembling, mixing, slicing, or opening packaging - NEVER cooking, heating on a stove, or baking.`,
-  microwave: `"microwave" - Microwave only (no stove/oven): everything allowed for "hotel" (no-cook/assembly) is fine, PLUS anything that can be prepared using only a microwave - e.g. microwaveable rice/oatmeal cups, steam-in-bag vegetables, reheating pre-cooked proteins, or a mug omelet made with eggs in a microwave-safe mug. The "prep" field may describe microwave heating times (e.g. "Microwave on high for 90 seconds") but must NOT mention a stovetop, oven, grill, or any other cooking appliance.`,
-  airplane_food: `"airplane_food" - Airline-provided meals only: this meal is served on the aircraft or bought at the airport, so there is no meal prep at all. The "description"/"prep"/"tip" fields should focus on how to SELECT or SUPPLEMENT the available airline/airport food (e.g. request the vegetarian/diabetic meal in advance, choose the side salad over fries, skip the bread roll and bring your own nuts or a protein bar to add protein, ask for black coffee instead of a sugary drink). Do NOT invent a from-scratch recipe for this meal.`,
+  full_kitchen: `full_kitchen: Full kitchen (stove, oven, fridge, cookware). All cooking methods OK.`,
+  hotel: `hotel: NO kitchen — no stove, oven, or any cooking equipment. Meals MUST be no-cook (ready-to-eat, assembled from pre-cooked/store-bought items, or grab-and-go). "prep" = assembly/slicing/opening only. NEVER mention cooking, heating on a stove, or baking.`,
+  microwave: `microwave: No stove/oven, microwave only. No-cook/assembly (same as hotel) is fine, PLUS microwave methods (microwaveable cups, steam-in-bag veg, reheating). "prep" may include microwave times. NEVER mention stove, oven, or grill.`,
+  airplane_food: `airplane_food: Airline meal served on board — no prep possible. "description"/"prep"/"tip" = how to SELECT or SUPPLEMENT airline/airport food (e.g. choose salad over fries, bring own nuts, ask for black coffee). Do NOT invent a from-scratch recipe.`,
 };
 
-// Builds the explicit per-option prep constraints for the crew's selected
-// kitchen access. Replaces the old plain "Kitchen access: x, y" line, which
-// gave the model no idea what was actually possible with each option.
 function buildKitchenAccessBlock(kitchen) {
   const list = (kitchen && kitchen.length) ? kitchen : ["full_kitchen"];
   const rules = list.map((k) => KITCHEN_ACCESS_RULES[k]).filter(Boolean);
   if (!rules.length) return "";
 
-  let block = `KITCHEN ACCESS CONSTRAINTS - the crew member has access to: ${list.join(", ")}.\n`
-    + rules.map((r) => `- ${r}`).join("\n");
+  let block = `KITCHEN ACCESS (${list.join(", ")}):\n` + rules.map((r) => `- ${r}`).join("\n");
 
   if (list.length > 1) {
-    block += `\nThis crew member selected MULTIPLE access types because different meals happen in different places during the day/pairing (e.g. breakfast at a hotel with no kitchen, dinner served on the plane). For EACH meal, decide which single access type realistically applies based on its meal type and the day's context (e.g. Dinner on a flying day is likely "airplane_food"; Breakfast or Lunch on the ground is likely "hotel" or "microwave" if listed), then apply ONLY that access type's constraints to that meal's "prep". Do not blend constraints from multiple access types within a single meal.`;
+    block += `\nMULTIPLE ACCESS TYPES: for each meal, apply whichever single type fits realistically (e.g. dinner on flying day → airplane_food; ground-day breakfast → hotel/microwave). Never blend constraints across types in one meal.`;
   }
 
   return block;
@@ -271,131 +265,107 @@ function buildKitchenAccessBlock(kitchen) {
 // Returns a strict rule block for the given diet key, injected verbatim into
 // every day prompt and the extras prompt so the model can't miss it.
 function getDietRules(rawDiet, calorieTarget) {
-  const VALIDATION_FOOTER = `\nCRITICAL: Before finalizing each meal, check every ingredient against the diet rules above. If ANY ingredient violates the diet, replace it. Do not include meals that only "mostly" comply — every ingredient must be fully compliant. The crew member's health and dietary needs depend on this accuracy.`;
+  const FOOTER = `\nCRITICAL: Check every ingredient against the rules above before finalizing each meal. Replace any violating item. Full compliance required — no partial exceptions.`;
 
   let block = "";
 
   switch (rawDiet) {
     case "none":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- No dietary restrictions apply.
-- Focus on balanced, nutritious meals with variety across the pairing.
-- Aim for a good mix of proteins, complex carbs, healthy fats, and vegetables at each meal.`;
+      block = `DIET: No restrictions. Aim for balanced meals with proteins, complex carbs, healthy fats, and vegetables.`;
       break;
 
     case "vegetarian":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- NO meat of any kind (no beef, pork, chicken, turkey, lamb, game, or any animal flesh).
-- NO seafood or fish of any kind.
-- Eggs and dairy ARE allowed (cheese, milk, yogurt, butter).
-- Every meal must get its protein from: eggs, dairy, legumes (lentils, chickpeas, beans), tofu, tempeh, seitan, nuts, seeds, or protein-rich grains (quinoa, edamame).
-- If protein in a meal is below 15g, note a protein-boosting fix in the "tip" field.`;
+      block = `DIET: VEGETARIAN — STRICT RULES:
+- NO meat (any animal flesh) or fish/seafood.
+- Eggs + dairy (cheese, milk, yogurt, butter) ARE allowed.
+- Protein must come from: eggs, dairy, legumes, tofu, tempeh, seitan, nuts, seeds, or quinoa/edamame.
+- If meal protein <15g, suggest a fix in the "tip" field.`;
       break;
 
     case "vegan":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- NO animal products of any kind: no meat, fish, eggs, dairy, honey, gelatin, or whey.
-- Every single ingredient in every meal must be 100% plant-based.
-- Every meal must get protein from: legumes, tofu, tempeh, seitan, edamame, lentils, nuts, seeds, nutritional yeast, or plant-based protein powder.
-- Watch for hidden animal products: no butter (use plant-based butter or coconut oil), no regular chocolate (use dairy-free dark chocolate), no Caesar dressing (use vegan versions), no egg-based pasta, no milk bread.
-- The grocery list "dairy" category must only contain plant-based dairy alternatives (oat milk, coconut yogurt, vegan cheese, etc.) — no actual dairy.
-- If protein in a meal is below 15g, note a plant-based protein fix in the "tip" field.`;
+      block = `DIET: VEGAN — STRICT RULES:
+- NO animal products: no meat, fish, eggs, dairy, honey, gelatin, or whey.
+- Every ingredient must be 100% plant-based. Watch for hidden animal products: use plant butter/coconut oil not butter; dairy-free dark chocolate not regular; vegan dressing not Caesar; egg-free pasta; dairy-free bread.
+- Protein must come from: legumes, tofu, tempeh, seitan, edamame, nuts, seeds, nutritional yeast.
+- Grocery "dairy" list: plant-based alternatives only (oat milk, coconut yogurt, vegan cheese) — no actual dairy.
+- If meal protein <15g, suggest a plant-protein fix in the "tip" field.`;
       break;
 
     case "gluten_free":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- NO gluten-containing ingredients: no wheat, barley, rye, spelt, kamut, triticale, or regular oats.
-- NO: regular bread, pasta, flour tortillas, crackers, soy sauce (use gluten-free tamari or coconut aminos instead), beer, most cereals, regular baked goods.
-- YES: rice, quinoa, corn, potatoes, certified gluten-free oats, buckwheat, millet, lentils, all proteins, all vegetables, all fruits.
-- Treat this as a celiac-level restriction (not just a preference). Add a cross-contamination warning in the "tip" field for any packaged foods or restaurant meals.
-- Always specify "gluten-free" versions of any packaged item (e.g. "gluten-free tamari" not "soy sauce", "gluten-free oats" not "oats").`;
+      block = `DIET: GLUTEN-FREE (celiac-level) — STRICT RULES:
+- NO wheat, barley, rye, spelt, regular oats, regular bread/pasta/flour tortillas/crackers/baked goods, soy sauce (use gluten-free tamari), or beer.
+- YES: rice, quinoa, corn, potatoes, GF-certified oats, buckwheat, millet, lentils, all proteins, all veg/fruit.
+- Always label packaged items as "gluten-free" (e.g. "gluten-free tamari", "gluten-free oats").
+- Add a cross-contamination warning in the "tip" for any packaged/restaurant item.`;
       break;
 
     case "halal":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- NO pork or pork-derived products (no bacon, ham, lard, pork gelatin, pepperoni, or salami unless explicitly halal-certified).
-- NO alcohol in any form (no wine-based sauces, no beer-braised dishes, no cooking wine, no alcohol-based vanilla extract — use pure vanilla bean or alcohol-free vanilla).
-- All meat and poultry must be specified as halal-certified (e.g. "halal chicken breast", "halal ground beef").
-- Seafood is permissible — include it as a protein option.
-- For restaurant or packaged food suggestions, add a note in the "tip" field to verify halal certification or ask staff about preparation.
-- Include a layover tip about finding halal restaurants or halal sections in local grocery stores.`;
+      block = `DIET: HALAL — STRICT RULES:
+- NO pork or pork-derived products (no bacon, ham, lard, pork gelatin).
+- NO alcohol in any form (no wine sauces, beer, cooking wine, alcohol-based vanilla — use alcohol-free vanilla).
+- All meat/poultry must be labeled "halal-certified".
+- Seafood is permissible.
+- Add a tip to verify halal certification at restaurants/stores, and a layover tip on finding halal options.`;
       break;
 
     case "kosher":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- NO pork or any pork-derived products.
-- NO shellfish of any kind (no shrimp, crab, lobster, mussels, clams, oysters, squid, or octopus).
-- NO mixing of meat and dairy in the same meal: if a meal contains any meat or poultry, it must contain NO dairy products whatsoever; if a meal contains dairy, it must contain NO meat or poultry.
-- All meat must be specified as kosher-certified (e.g. "kosher beef", "kosher chicken").
-- Fish must have both fins and scales (salmon, tuna, cod, tilapia, halibut are fine; catfish, shark, swordfish are not).
-- Prefer pareve meals (neither meat nor dairy — e.g. fish, eggs, vegetables, grains) for travel simplicity.
-- For restaurant suggestions, add a tip to look for a hechsher (kosher certification symbol).`;
+      block = `DIET: KOSHER — STRICT RULES:
+- NO pork. NO shellfish (shrimp, crab, lobster, clams, mussels, oysters, squid).
+- NO meat + dairy in the same meal (keep them fully separate).
+- All meat must be labeled "kosher-certified". Fish: fins + scales only (salmon, tuna, cod, tilapia OK; catfish, shark NOT OK).
+- Prefer pareve meals (fish/eggs/veg/grains) for travel simplicity.
+- Add a hechsher tip for restaurant meals.`;
       break;
 
     case "low_carb":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- Maximum 50g total carbohydrates per day across ALL meals combined.
-- Add an estimated carb count to the "tags" field for every meal (e.g. "~8g net carbs").
-- NO: bread, pasta, rice, potatoes, sugar, sweet fruits (except small portions of berries under 50g), corn, high-carb legumes in large quantities, most processed snacks, fruit juice, or sweetened drinks.
-- YES: all proteins (meat, fish, eggs), non-starchy vegetables (leafy greens, broccoli, cauliflower, zucchini, peppers, spinach, cucumber), full-fat cheese, nuts, seeds, avocado, olive oil, berries in small portions.
-- Prioritize fat and protein for satiety since carbs are restricted.
-- Total daily calories must still meet the crew member's energy needs — make up the difference from protein and fat, not carbs.
-- Verify in your planning that the sum of estimated carbs across all meals stays at or below 50g.`;
+      block = `DIET: LOW-CARB — STRICT RULES:
+- MAX 50g total carbs/day across all meals combined. Add "~Xg carbs" tag to every meal.
+- NO bread, pasta, rice, potatoes, sugar, most fruit (berries ≤50g OK), corn, juice, sweetened drinks.
+- YES: all proteins, non-starchy veg (greens, broccoli, cauliflower, zucchini, peppers), cheese, nuts, seeds, avocado, olive oil.
+- Make up calories from protein and fat. Verify total daily carbs ≤50g.`;
       break;
 
     case "dairy_free":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- NO dairy products of any kind: no milk, cheese, butter, cream, yogurt, whey, casein, lactose, or ghee.
-- Watch for hidden dairy: no regular chocolate (use dairy-free dark chocolate), no cream sauces (use coconut cream or oat cream), no most baked goods unless specified dairy-free, no protein bars without confirming dairy-free.
-- YES: plant-based alternatives — oat milk, almond milk, soy milk, coconut yogurt, vegan/dairy-free cheese, coconut oil, dairy-free dark chocolate.
-- Always specify dairy-free alternatives explicitly in the meal name and prep (e.g. "oat milk latte" not just "latte", "dairy-free coconut yogurt" not just "yogurt").
-- The grocery list "dairy" category must only contain dairy-free alternatives — no actual dairy.`;
+      block = `DIET: DAIRY-FREE — STRICT RULES:
+- NO dairy: no milk, cheese, butter, cream, yogurt, whey, casein, ghee, or lactose.
+- Watch for hidden dairy: use dairy-free dark chocolate, coconut/oat cream for sauces.
+- Name the dairy-free alternative explicitly (e.g. "oat milk latte" not "latte", "coconut yogurt" not "yogurt").
+- Grocery "dairy" list: dairy-free alternatives only — no actual dairy.`;
       break;
 
     case "mediterranean":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- Base every meal around: extra-virgin olive oil, vegetables, fruits, whole grains, legumes, nuts, seeds, fresh herbs and spices.
-- Include fish or seafood at least once per day (salmon, sardines, tuna, mackerel, shrimp, cod, sea bass, etc.).
-- Poultry (chicken, turkey) is fine 2–3 times per week maximum. Red meat should appear at most once across the entire pairing.
-- Dairy in moderation only: small amounts of Greek yogurt, feta, Parmesan, or ricotta are fine.
-- Use extra-virgin olive oil as the primary cooking and dressing fat — not butter, not vegetable oil, not canola oil.
-- NO ultra-processed foods, fast food, or highly refined packaged snacks.
-- Wine is traditionally part of the Mediterranean diet but must be omitted for aviation crew (operational requirements).`;
+      block = `DIET: MEDITERRANEAN — STRICT RULES:
+- Primary fat: extra-virgin olive oil only (not butter, not vegetable/canola oil).
+- At least 1 fish/seafood meal per day (salmon, sardines, tuna, mackerel, shrimp, etc.).
+- Poultry max 2–3×/week; red meat at most once per pairing.
+- Dairy in moderation: small amounts of Greek yogurt, feta, Parmesan OK.
+- NO ultra-processed foods or fast food. No wine (aviation crew).`;
       break;
 
     case "carnivore":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- ONLY animal products are allowed: meat (beef, pork, lamb, poultry, game), fish, eggs, and animal fats (butter, tallow, lard, ghee).
-- Suggest organ meats (liver, heart, kidney) at least once during the pairing for nutrient density — frame them as "nutrient-dense" in the description.
-- NO plant ingredients of any kind: no vegetables, no fruit, no grains, no legumes, no nuts, no seeds, no sugar, no plant oils (no olive oil, no coconut oil, no canola oil).
-- Dairy: optional — if included, full-fat only (butter, heavy cream, aged hard cheeses). Add a note in the "tip" field that some carnivore followers exclude dairy and it can be omitted.
-- Include an electrolyte tip in at least one meal: on a carnivore diet, sodium, potassium, and magnesium are important — suggest bone broth, liberal salting, or sugar-free electrolyte supplements.
-- Cooking methods: grill, roast, pan-fry in butter/tallow/lard. For hotel/no-kitchen access, suggest pre-cooked/deli meats, hard-boiled eggs, canned fish (tuna, sardines, salmon).
-- The grocery list must contain ZERO plant-based items — no produce, no plant pantry items. The "produce" and "pantry" categories should be empty arrays or note "None — carnivore diet".`;
+      block = `DIET: CARNIVORE — STRICT RULES:
+- ONLY animal products: meat, fish, eggs, butter/tallow/lard/ghee.
+- Include organ meat (liver, heart) at least once per pairing.
+- ZERO plant ingredients: no veg, fruit, grains, legumes, nuts, seeds, sugar, or plant oils.
+- Dairy optional: full-fat only (butter, heavy cream, hard cheese). Add tip that some carnivores exclude dairy.
+- Include an electrolyte tip (bone broth, salt, sugar-free electrolytes) in at least one meal.
+- Grocery produce + pantry categories: empty (carnivore only — no plant items).`;
       break;
 
     case "calorie_deficit":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- This crew member is on a calorie deficit plan (see CALORIE DEFICIT GOAL section below for the daily kcal target).
-- No specific food-type restrictions beyond the calorie target.
-- Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods to maximize satiety during the deficit.
-- Focus on nutrient-dense whole foods to ensure adequate micronutrient intake while eating less.${calorieTarget ? `\n- The daily calorie target is ${calorieTarget} kcal — every meal's "calories" value must sum to this target ±50 kcal.` : ""}`;
+      block = `DIET: CALORIE DEFICIT — see CALORIE DEFICIT GOAL below for daily kcal target.
+- No food-type restrictions. Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods for satiety.${calorieTarget ? `\n- Daily target: ${calorieTarget} kcal — meal calories must sum to ±50 kcal of this.` : ""}`;
       break;
 
     case "other":
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- This crew member has specified a custom diet (see the Diet field in CREW PROFILE above).
-- Follow their stated dietary preferences as closely as possible.
-- When in doubt, err on the side of caution and avoid any ingredients that might conflict with their stated diet.`;
+      block = `DIET: Custom (see Diet field in CREW PROFILE above). Follow stated preferences closely; when in doubt, avoid anything that might conflict.`;
       break;
 
     default:
-      block = `DIET RULES — YOU MUST FOLLOW THESE STRICTLY:
-- No dietary restrictions apply.
-- Focus on balanced, nutritious meals with variety across the pairing.`;
+      block = `DIET: No restrictions. Balanced, nutritious meals with variety.`;
   }
 
-  return block + VALIDATION_FOOTER;
+  return block + FOOTER;
 }
 
 // Builds the shared crew-profile context used by every prompt for a plan.
@@ -528,9 +498,9 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
     const dayPromises = [];
     for (let i = 1; i <= pairingDays; i++) {
-      dayPromises.push(runStructured(buildDayPrompt(data, i, pairingDays, ctx), DAY_SCHEMA, 2500));
+      dayPromises.push(runStructured(buildDayPrompt(data, i, pairingDays, ctx), DAY_SCHEMA, 1400, FAST_MODEL));
     }
-    const extrasPromise = runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 4000);
+    const extrasPromise = runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000);
 
     const [days, extras] = await Promise.all([Promise.all(dayPromises), extrasPromise]);
     days.forEach((d, i) => {
