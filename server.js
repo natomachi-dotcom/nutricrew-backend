@@ -331,10 +331,7 @@ function generatePlanEmailHTML(name, lang, plan) {
 }
 
 async function sendPlanEmail(toEmail, name, lang, plan) {
-  if (!process.env.RESEND_API_KEY) {
-    console.error("Plan email skipped: RESEND_API_KEY not set");
-    return;
-  }
+  if (!process.env.RESEND_API_KEY) return;
   const date = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   const result = await resend.emails.send({
     from: FROM_EMAIL,
@@ -342,7 +339,7 @@ async function sendPlanEmail(toEmail, name, lang, plan) {
     subject: `✈ Your NutriCrew Meal Plan — ${date}`,
     html: generatePlanEmailHTML(name, lang, plan),
   });
-  console.log("Plan email result:", JSON.stringify(result));
+  if (result.error) console.error("Plan email error:", result.error);
 }
 
 // ─── AI ───────────────────────────────────────────────────────────────────────
