@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
 import Stripe from "stripe";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { createHash, randomBytes } from "crypto";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -115,6 +116,15 @@ const generatePlanLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => req.body?.data?.email?.toLowerCase().trim() || ipKeyGenerator(req.ip),
   message: { error: "Too many plan generation requests. Please try again later." },
+});
+
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.body?.email?.toLowerCase().trim() || ipKeyGenerator(req.ip),
+  message: { error: "Too many code requests. Please try again in 15 minutes." },
 });
 
 const MEAL_SCHEMA = {
@@ -273,6 +283,29 @@ const MEAL_TYPE_COLORS = {
   Dinner:    "#C9A84C",
   Snack:     "#7A8EAA",
 };
+
+function generateOTPEmailHTML(otp) {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>NutriCrew Verification</title></head>
+<body style="margin:0;padding:24px 12px;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.10);">
+  <tr><td style="background:#0A1628;padding:28px 32px;text-align:center;">
+    <div style="font-size:24px;font-weight:bold;color:#C9A84C;letter-spacing:4px;">✈ NUTRICREW</div>
+  </td></tr>
+  <tr><td style="padding:36px 32px;text-align:center;">
+    <div style="font-size:18px;color:#0A1628;font-weight:bold;margin-bottom:8px;">Your verification code</div>
+    <div style="font-size:14px;color:#666;margin-bottom:24px;">Enter this code in the NutriCrew app to sign in.</div>
+    <div style="font-size:52px;font-weight:bold;color:#1E3A6E;letter-spacing:14px;margin:0 0 24px;font-family:monospace;">${otp}</div>
+    <div style="font-size:14px;color:#888;">This code expires in <strong>10 minutes</strong>.</div>
+    <div style="font-size:13px;color:#aaa;margin-top:16px;">If you didn't request this, you can safely ignore this email.</div>
+  </td></tr>
+  <tr><td style="background:#0A1628;padding:18px 32px;text-align:center;">
+    <div style="font-size:12px;color:#4A6080;">© NutriCrew · Fuel Your Flight</div>
+  </td></tr>
+</table>
+</body></html>`;
+}
 
 function generatePlanEmailHTML(name, lang, plan) {
   const { summary, days, groceryList, foodRestrictions } = plan;
@@ -732,6 +765,87 @@ Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "NutriCrew AI backend is running" });
 });
+
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
+
+app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: "Valid email is required." });
+    }
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otpHash = createHash("sha256").update(otp).digest("hex");
+
+    const storeRes = await fetch(`${CRUD_API_BASE}/api/auth/store-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+      body: JSON.stringify({ email: email.toLowerCase().trim(), otpHash }),
+    });
+    if (!storeRes.ok) {
+      const err = await storeRes.json().catch(() => ({}));
+      return res.status(500).json({ error: err.error || "Failed to send code. Please try again." });
+    }
+
+    if (process.env.RESEND_API_KEY) {
+      const emailResult = await resend.emails.send({
+        from: FROM_EMAIL,
+        to: [email],
+        subject: `${otp} is your NutriCrew verification code`,
+        html: generateOTPEmailHTML(otp),
+      });
+      if (emailResult.error) console.error("OTP email error:", emailResult.error);
+    } else {
+      console.log(`[DEV] OTP for ${email}: ${otp}`);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("send-otp error:", err.message);
+    res.status(500).json({ error: "Failed to send code. Please try again." });
+  }
+});
+
+app.post("/api/auth/verify-otp", async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ error: "Email and code are required." });
+    const otpHash = createHash("sha256").update(String(otp).trim()).digest("hex");
+
+    const checkRes = await fetch(`${CRUD_API_BASE}/api/auth/check-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+      body: JSON.stringify({ email: email.toLowerCase().trim(), otpHash }),
+    });
+    const data = await checkRes.json();
+    if (!checkRes.ok) return res.status(checkRes.status).json(data);
+    res.json(data);
+  } catch (err) {
+    console.error("verify-otp error:", err.message);
+    res.status(500).json({ error: "Verification failed. Please try again." });
+  }
+});
+
+app.post("/api/auth/verify-session", async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(401).json({ error: "No token provided." });
+
+    const checkRes = await fetch(`${CRUD_API_BASE}/api/auth/check-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+      body: JSON.stringify({ token }),
+    });
+    const data = await checkRes.json();
+    if (!checkRes.ok) return res.status(checkRes.status).json(data);
+    res.json(data);
+  } catch (err) {
+    console.error("verify-session error:", err.message);
+    res.status(500).json({ error: "Session check failed." });
+  }
+});
+
+// ─── PLAN GENERATION ──────────────────────────────────────────────────────────
 
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   try {
