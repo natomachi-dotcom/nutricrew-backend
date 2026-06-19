@@ -784,7 +784,13 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
     });
     if (!storeRes.ok) {
       const err = await storeRes.json().catch(() => ({}));
-      return res.status(500).json({ error: err.error || "Failed to send code. Please try again." });
+      return res.status(storeRes.status).json({ error: err.error || "Failed to send code. Please try again." });
+    }
+    const storeData = await storeRes.json();
+
+    // Email already verified — return a fresh session token directly, no code needed.
+    if (storeData.alreadyVerified) {
+      return res.json({ alreadyVerified: true, token: storeData.token, email: storeData.email, name: storeData.name, isPremium: storeData.isPremium, pairingCount: storeData.pairingCount });
     }
 
     if (process.env.RESEND_API_KEY) {
@@ -799,7 +805,7 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
       console.log(`[DEV] OTP for ${email}: ${otp}`);
     }
 
-    res.json({ ok: true });
+    res.json({ alreadyVerified: false });
   } catch (err) {
     console.error("send-otp error:", err.message);
     res.status(500).json({ error: "Failed to send code. Please try again." });
