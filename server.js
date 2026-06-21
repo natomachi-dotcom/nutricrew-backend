@@ -484,6 +484,8 @@ async function runStructured(prompt, schema, maxTokens, model = FAST_MODEL) {
   if (message.stop_reason === "refusal") {
     throw Object.assign(new Error("The model declined to generate this content."), { status: 502 });
   }
+  const u = message.usage;
+  if (u) console.log(`[tokens] in=${u.input_tokens} out=${u.output_tokens} max=${maxTokens} model=${model.split("-")[1]}`);
   return extractJSON(message);
 }
 
