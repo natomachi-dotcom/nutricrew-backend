@@ -685,6 +685,7 @@ function buildContext(data, lang, pairingDays) {
     : "";
   const lunchBagMap = { small: "Small (~4L, fits 1–2 containers)", medium: "Medium (~6L, fits 2–3 containers)", large: "Large (~10L, fits 3–4 containers + extras)" };
   const lunchBag = data.lunch_bag ? lunchBagMap[data.lunch_bag] || data.lunch_bag : null;
+  const airplaneMealDesc = (data.airplane_meal_description || "").trim() || null;
 
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}${ageStr}
@@ -694,9 +695,9 @@ function buildContext(data, lang, pairingDays) {
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
 - Going to USA: ${data.going_usa}
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
-- Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}`;
+- Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules, lunchBag };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc };
 }
 
 function buildAllDaysPrompt(data, pairingDays, ctx) {
@@ -725,7 +726,7 @@ Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 Each day: include Breakfast, Lunch, Dinner, and 1-2 Snacks.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
-Every meal must include a "tip" and an "emoji" field with 2–3 food emoji accurately representing the meal.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}
+Every meal must include a "tip" and an "emoji" field with 2–3 food emoji accurately representing the meal.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}${ctx.airplaneMealDesc ? `\nThe crew member has told us their airplane meal will include: "${ctx.airplaneMealDesc}". For any meal of type "airplane_food", describe how to complement or adapt this specific meal (e.g. add protein, skip the dessert, supplement with a snack). Plan the rest of the day's meals to balance the nutrients already provided by this airplane meal.` : ""}
 Vary meal choices across all days — different recipes, ingredients, and combinations each day.
 
 Per-day instructions:
