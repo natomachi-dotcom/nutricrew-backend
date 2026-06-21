@@ -521,6 +521,7 @@ const KITCHEN_ACCESS_RULES = {
   hotel: `hotel: NO kitchen — no stove, oven, or any cooking equipment. Meals MUST be no-cook (ready-to-eat, assembled from pre-cooked/store-bought items, or grab-and-go). "prep" = assembly/slicing/opening only. NEVER mention cooking, heating on a stove, or baking. REFRIGERATION: for any perishable ingredient (fresh proteins, dairy, cut produce, pre-cooked items), add a note in the "tip" field stating it needs refrigeration — advise the crew member to request a hotel mini-fridge or to consume the item within 2 hours of purchase if no fridge is available.`,
   microwave: `microwave: No stove/oven, microwave only. No-cook/assembly (same as hotel) is fine, PLUS microwave methods (microwaveable cups, steam-in-bag veg, reheating). "prep" may include microwave times. NEVER mention stove, oven, or grill. REFRIGERATION: for any perishable ingredient, add a note in the "tip" field advising the crew member to request a hotel mini-fridge or consume within 2 hours if no fridge is available.`,
   airplane_food: `airplane_food: Airline meal served on board — no prep possible. "description"/"prep"/"tip" = how to SELECT or SUPPLEMENT airline/airport food (e.g. choose salad over fries, bring own nuts, ask for black coffee). Do NOT invent a from-scratch recipe.`,
+  fridge: `fridge: Refrigerator available but NO cooking equipment (no stove, oven, or microwave). Meals MUST be cold/no-cook: pre-made salads, cold wraps, yogurt, cheese, deli meats, fresh fruit, overnight oats, cold-brew etc. "prep" = assemble/portion/slice only. Perishables can be stored safely in the fridge.`,
 };
 
 function buildKitchenAccessBlock(kitchen) {
@@ -1092,6 +1093,156 @@ app.post("/api/check-airplane-meal", async (req, res) => {
     res.json(extractJSON(message));
   } catch (err) {
     handleAnthropicError(err, res);
+  }
+});
+
+// ─── ROSTER ───────────────────────────────────────────────────────────────────
+
+const ROSTER_SCHEMA = {
+  type: "object",
+  properties: {
+    pairings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          pairingDate:  { type: "string" },
+          returnDate:   { type: "string" },
+          pairingDays:  { type: "number" },
+          departure:    { type: "string" },
+          destinations: { type: "array", items: { type: "string" } },
+          goingUsa:     { type: "string" },
+          timezone:     { type: "number" },
+        },
+        required: ["pairingDate", "pairingDays", "departure", "destinations"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["pairings"],
+  additionalProperties: false,
+};
+
+// Parse roster image(s) with Haiku vision
+app.post("/api/roster/parse", apiLimiter, async (req, res) => {
+  try {
+    const { images, homeBase, lang } = req.body;
+    if (!Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({ error: "Missing images array" });
+    }
+    if (images.length > 4) return res.status(400).json({ error: "Max 4 images" });
+
+    const imageContent = images.map(({ data, mediaType }) => ({
+      type: "image",
+      source: { type: "base64", media_type: mediaType || "image/jpeg", data },
+    }));
+
+    const today = new Date().toISOString().slice(0, 10);
+    const prompt = `You are analyzing a cabin crew roster/schedule. Today's date is ${today}. The crew member's home base is: ${homeBase || "unknown"}.
+
+Extract ALL future pairings (trips) from this roster. For each pairing:
+- pairingDate: departure date in YYYY-MM-DD format
+- returnDate: return date in YYYY-MM-DD format
+- pairingDays: number of days away (minimum 1)
+- departure: home base city name (e.g. "Miami", "London", "Paris")
+- destinations: array of layover/destination city names in order (e.g. ["New York", "London"])
+- goingUsa: "yes" if ANY destination is in the USA, otherwise "no"
+- timezone: estimated hours difference from home base to main destination (negative if behind, positive if ahead, 0 if unsure)
+
+Only include pairings with dates on or after today (${today}). Ignore past dates.
+Return ONLY valid JSON with a "pairings" array. If you cannot read the roster clearly, return {"pairings":[]}.`;
+
+    const message = await client.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 2000,
+      output_config: { format: { type: "json_schema", schema: ROSTER_SCHEMA } },
+      messages: [{ role: "user", content: [...imageContent, { type: "text", text: prompt }] }],
+    });
+
+    const u = message.usage;
+    if (u) console.log(`[roster-parse] in=${u.input_tokens} out=${u.output_tokens}`);
+
+    const result = extractJSON(message);
+    res.json(result);
+  } catch (err) {
+    handleAnthropicError(err, res);
+  }
+});
+
+// Send kitchen confirmation reminder email (called from CRUD cron)
+app.post("/api/roster/send-reminder", async (req, res) => {
+  const key = req.headers["x-internal-key"];
+  if (key !== INTERNAL_API_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const { email, name, pairingDate, destinations, departure, pairingDays, confirmToken, lang } = req.body;
+    if (!email || !confirmToken) return res.status(400).json({ error: "Missing required fields" });
+
+    const dest = Array.isArray(destinations) ? destinations.join(" → ") : destinations;
+    const date = pairingDate ? new Date(pairingDate).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }) : "tomorrow";
+    const crudBase = CRUD_API_BASE;
+
+    const kitchenOptions = [
+      { key: "hotel",        emoji: "🏨", label: "Hotel / No Kitchen" },
+      { key: "microwave",    emoji: "📦", label: "Microwave Only" },
+      { key: "fridge",       emoji: "❄️",  label: "Fridge Available" },
+      { key: "airplane_food",emoji: "✈️",  label: "Crew Meals on Board" },
+    ];
+
+    const btnHtml = kitchenOptions.map(({ key, emoji, label }) => `
+      <a href="${crudBase}/api/roster/confirm-kitchen?token=${confirmToken}&kitchen=${key}"
+         style="display:block;margin:10px 0;padding:16px 24px;background:#152850;border:2px solid #1E3A6E;border-radius:12px;color:#F8FAFF;text-decoration:none;font-size:16px;font-weight:600;text-align:center;">
+        ${emoji} ${label}
+      </a>`).join("");
+
+    const html = `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#07101E;font-family:system-ui,sans-serif;">
+<div style="max-width:520px;margin:0 auto;padding:32px 16px;">
+  <div style="background:#0F2040;border-radius:20px;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#0A1628,#152850);padding:28px 32px;text-align:center;border-bottom:1px solid #1E3A6E;">
+      <div style="font-size:36px;">✈️</div>
+      <div style="color:#C9A84C;font-size:22px;font-weight:700;margin-top:8px;">NutriCrew</div>
+      <div style="color:#7A8EAA;font-size:13px;margin-top:4px;">Your pairing starts tomorrow</div>
+    </div>
+    <div style="padding:32px;">
+      <p style="color:#F8FAFF;font-size:17px;margin:0 0 8px;">Hey ${name?.split(" ")[0] || "there"} 👋</p>
+      <p style="color:#7A8EAA;font-size:15px;margin:0 0 24px;">You're flying <strong style="color:#E8C96A;">${dest}</strong> on <strong style="color:#E8C96A;">${date}</strong>.</p>
+      <p style="color:#F8FAFF;font-size:16px;font-weight:600;margin:0 0 16px;">What's your kitchen situation for this pairing?</p>
+      ${btnHtml}
+      <p style="color:#7A8EAA;font-size:13px;margin:24px 0 0;text-align:center;">Tap once — your personalised meal plan lands in your inbox within 30 seconds.</p>
+    </div>
+  </div>
+</div></body></html>`;
+
+    if (process.env.RESEND_API_KEY) {
+      await resend.emails.send({
+        from: FROM_EMAIL,
+        to: [email],
+        subject: `✈️ Your ${dest} pairing is tomorrow — what's your kitchen?`,
+        html,
+      });
+    } else {
+      console.log(`[DEV] Reminder email for ${email}: ${dest} on ${date}`);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Reminder email error:", err.message);
+    res.status(500).json({ error: "Failed to send reminder" });
+  }
+});
+
+// Relay roster store from frontend → CRUD backend (keeps internal key server-side)
+app.post("/api/roster/store-pairings", apiLimiter, async (req, res) => {
+  try {
+    const { email, pairings, profile } = req.body;
+    if (!email || !Array.isArray(pairings) || pairings.length === 0) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    const r = await crudInternal("/api/roster/store", { email, pairings, profile });
+    res.json(r);
+  } catch (err) {
+    console.error("roster/store-pairings error:", err.message);
+    res.status(502).json({ error: "Failed to store pairings" });
   }
 });
 
