@@ -1019,18 +1019,17 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
     const extras = await extrasPromise;
 
-    // Mark all days as seen for this user (cached + newly stored)
+    // Fire-and-forget: mark seen + increment (neither blocks the response)
     markDaysSeen(email, [...cachedDayIds, ...newDayIds]);
-
-    const updatedUsage = await incrementPairingUsage(email);
+    incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
 
     const planResponse = {
       summary: extras.summary,
       days,
       groceryList: extras.groceryList,
       foodRestrictions: extras.foodRestrictions,
-      pairingCount: updatedUsage.pairingCount,
-      isPremium: updatedUsage.isPremium,
+      pairingCount: usage.pairingCount + 1,
+      isPremium: usage.isPremium,
     };
 
     sendPlanEmail(email, data.name, lang || "en", planResponse).catch(err =>
