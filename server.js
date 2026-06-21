@@ -75,7 +75,6 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
 app.use(express.json());
 
 const client = new Anthropic();
-const PLAN_MODEL = "claude-sonnet-4-6";
 const FAST_MODEL = "claude-haiku-4-5-20251001";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -994,7 +993,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     }
 
     // Always generate extras (grocery list, restrictions, summary) — these are personalized
-    const extras = await runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000);
+    const extras = await runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000, FAST_MODEL);
 
     // Mark all days as seen for this user (cached + newly stored)
     markDaysSeen(email, [...cachedDayIds, ...newDayIds]);
