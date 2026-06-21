@@ -1231,6 +1231,19 @@ app.post("/api/roster/send-reminder", async (req, res) => {
   }
 });
 
+// Relay push subscription from frontend → CRUD backend (keeps internal key server-side)
+app.post("/api/push/subscribe", apiLimiter, async (req, res) => {
+  try {
+    const { email, subscription } = req.body;
+    if (!email || !subscription) return res.status(400).json({ error: "Missing fields" });
+    const r = await crudInternal("/api/push/subscribe", { email, subscription });
+    res.json(r);
+  } catch (err) {
+    console.error("push/subscribe relay error:", err.message);
+    res.status(502).json({ error: "Failed to store push subscription" });
+  }
+});
+
 // Relay roster store from frontend → CRUD backend (keeps internal key server-side)
 app.post("/api/roster/store-pairings", apiLimiter, async (req, res) => {
   try {
