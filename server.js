@@ -896,6 +896,25 @@ async function storeCachedDays(days, cacheKey) {
   } catch (e) { console.error("meal-cache/store failed:", e.message); return { ids: [] }; }
 }
 
+function buildExtrasCacheKey(data, ctx, lang, pairingDays) {
+  const base = buildCacheKey(data, ctx, lang);
+  const destinations = (data.destinations || []).slice().sort();
+  return { ...base, destinationKey: destinations.join(",") || "none", goingUsa: data.going_usa === "yes" ? "yes" : "no", pairingDays };
+}
+
+async function queryExtrasCache(extrasKey) {
+  try {
+    const r = await crudInternal("/api/extras-cache/query", extrasKey);
+    return r.hit ? r.extras : null;
+  } catch { return null; }
+}
+
+function storeExtrasCache(extrasKey, extras) {
+  crudInternal("/api/extras-cache/store", { ...extrasKey, ...extras }).catch(e =>
+    console.error("extras-cache/store failed:", e.message)
+  );
+}
+
 async function markDaysSeen(email, dayIds) {
   if (!dayIds || dayIds.length === 0) return;
   try { await crudInternal("/api/meal-cache/mark-seen", { email, dayIds }); }
@@ -913,7 +932,18 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     if (!email) return res.status(400).json({ error: "Missing 'email' in request data" });
     if (!EMAIL_REGEX.test(email)) return res.status(400).json({ error: "Invalid 'email' format" });
 
-    const usage = await checkPairingUsage(email, data.name, req.ip);
+    const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
+    const ctx = buildContext(data, lang, pairingDays);
+    const cacheKey = buildCacheKey(data, ctx, lang);
+    const extrasKey = buildExtrasCacheKey(data, ctx, lang, pairingDays);
+
+    // Run auth check, meal cache query, and extras cache query all in parallel
+    const [usage, { days: cachedDays }, cachedExtras] = await Promise.all([
+      checkPairingUsage(email, data.name, req.ip),
+      queryCachedDays(email, cacheKey, pairingDays),
+      queryExtrasCache(extrasKey),
+    ]);
+
     if (!usage.allowed) {
       return res.status(403).json({
         error: "premium_required",
@@ -931,19 +961,15 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       });
     }
 
-    const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
-    const ctx = buildContext(data, lang, pairingDays);
-    const cacheKey = buildCacheKey(data, ctx, lang);
-
-    // Try to serve all days from cache (user-unseen meals from the shared DB)
-    const { days: cachedDays } = await queryCachedDays(email, cacheKey, pairingDays);
     const cachedDayIds = cachedDays.map(d => d._id);
-
     let days;
     let newDayIds = [];
 
-    // Start EXTRAS in parallel regardless — it doesn't depend on DAYS result
-    const extrasPromise = runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 1200, FAST_MODEL);
+    // Start EXTRAS: use cache if available, otherwise generate with Haiku
+    const extrasPromise = cachedExtras
+      ? Promise.resolve(cachedExtras)
+      : runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 1200, FAST_MODEL)
+          .then(result => { storeExtrasCache(extrasKey, result); return result; });
 
     if (cachedDays.length >= pairingDays) {
       // Full cache hit — no DAYS API call needed
@@ -954,9 +980,9 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         meals: d.meals,
         totalCalories: d.totalCalories,
       }));
-      console.log(`[meal-cache] HIT for ${email}: served ${pairingDays} day(s) from cache`);
+      console.log(`[meal-cache] HIT for ${email}: days=cache extras=${cachedExtras ? "cache" : "ai"}`);
     } else {
-      // Partial or full cache miss — generate missing days in parallel with EXTRAS
+      // Partial or full cache miss — generate missing days (EXTRAS runs in parallel)
       const missing = pairingDays - cachedDays.length;
       const maxDayTokens = Math.min(2200 * missing, 7500);
 
@@ -988,7 +1014,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         meals: d.meals,
         totalCalories: d.totalCalories,
       }));
-      console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${cachedDays.length} from cache`);
+      console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s) extras=${cachedExtras ? "cache" : "ai"}`);
     }
 
     const extras = await extrasPromise;
