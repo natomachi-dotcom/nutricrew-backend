@@ -1182,18 +1182,9 @@ app.post("/api/roster/send-reminder", async (req, res) => {
     const date = pairingDate ? new Date(pairingDate).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }) : "tomorrow";
     const crudBase = CRUD_API_BASE;
 
-    const kitchenOptions = [
-      { key: "hotel",        emoji: "🏨", label: "Hotel / No Kitchen" },
-      { key: "microwave",    emoji: "📦", label: "Microwave Only" },
-      { key: "fridge",       emoji: "❄️",  label: "Fridge Available" },
-      { key: "airplane_food",emoji: "✈️",  label: "Crew Meals on Board" },
-    ];
-
-    const btnHtml = kitchenOptions.map(({ key, emoji, label }) => `
-      <a href="${crudBase}/api/roster/confirm-kitchen?token=${confirmToken}&kitchen=${key}"
-         style="display:block;margin:10px 0;padding:16px 24px;background:#152850;border:2px solid #1E3A6E;border-radius:12px;color:#F8FAFF;text-decoration:none;font-size:16px;font-weight:600;text-align:center;">
-        ${emoji} ${label}
-      </a>`).join("");
+    // Email clients strip <form>/checkboxes, so the email links to the
+    // kitchen-select web page, which supports picking more than one option.
+    const kitchenSelectUrl = `${crudBase}/api/roster/kitchen-select?token=${confirmToken}`;
 
     const html = `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#07101E;font-family:system-ui,sans-serif;">
 <div style="max-width:520px;margin:0 auto;padding:32px 16px;">
@@ -1207,8 +1198,8 @@ app.post("/api/roster/send-reminder", async (req, res) => {
       <p style="color:#F8FAFF;font-size:17px;margin:0 0 8px;">Hey ${name?.split(" ")[0] || "there"} 👋</p>
       <p style="color:#7A8EAA;font-size:15px;margin:0 0 24px;">You're flying <strong style="color:#E8C96A;">${dest}</strong> on <strong style="color:#E8C96A;">${date}</strong>.</p>
       <p style="color:#F8FAFF;font-size:16px;font-weight:600;margin:0 0 16px;">What's your kitchen situation for this pairing?</p>
-      ${btnHtml}
-      <p style="color:#7A8EAA;font-size:13px;margin:24px 0 0;text-align:center;">Tap once — your personalised meal plan lands in your inbox within 30 seconds.</p>
+      <a href="${kitchenSelectUrl}" style="display:block;margin:10px 0;padding:16px 24px;background:#C9A84C;border-radius:12px;color:#07101E;text-decoration:none;font-size:16px;font-weight:700;text-align:center;">🍽️ Choose Your Kitchen Setup →</a>
+      <p style="color:#7A8EAA;font-size:13px;margin:24px 0 0;text-align:center;">You can select more than one option — your personalised meal plan lands in your inbox within 30 seconds.</p>
     </div>
   </div>
 </div></body></html>`;
