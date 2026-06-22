@@ -1244,6 +1244,180 @@ app.post("/api/push/subscribe", apiLimiter, async (req, res) => {
   }
 });
 
+// ─── GYM PLAN ─────────────────────────────────────────────────────────────────
+
+// Exercises Haiku must choose from — each has a YouTube video ID for the thumbnail
+const EXERCISE_LIBRARY = [
+  { name: "Push-Up",               muscle: "Chest",       vid: "IODxDxX7oi4" },
+  { name: "Diamond Push-Up",       muscle: "Triceps",     vid: "J0DXBSpghaI" },
+  { name: "Pike Push-Up",          muscle: "Shoulders",   vid: "oMhDeQd7tYU" },
+  { name: "Squat",                 muscle: "Legs",        vid: "ultWZbUMPL8" },
+  { name: "Jump Squat",            muscle: "Legs",        vid: "CVaEhXotL7M" },
+  { name: "Lunge",                 muscle: "Legs",        vid: "QOVaHwm-Q6U" },
+  { name: "Reverse Lunge",         muscle: "Legs",        vid: "wrwwXE_x-pQ" },
+  { name: "Glute Bridge",          muscle: "Glutes",      vid: "OUgsJ8-Vi0E" },
+  { name: "Calf Raise",            muscle: "Calves",      vid: "gwLzBJYoWlA" },
+  { name: "Wall Sit",              muscle: "Legs",        vid: "y-wV4Venusw"  },
+  { name: "Plank",                 muscle: "Core",        vid: "pSHjTRaRanQ"  },
+  { name: "Side Plank",            muscle: "Core",        vid: "K2VljzCC16g"  },
+  { name: "Crunch",                muscle: "Core",        vid: "Xyd_fa5zoEU"  },
+  { name: "Bicycle Crunch",        muscle: "Core",        vid: "9FGilxCbdz8"  },
+  { name: "Leg Raise",             muscle: "Core",        vid: "JB2oyawG9KI"  },
+  { name: "Russian Twist",         muscle: "Core",        vid: "wkD8rjkodUI"  },
+  { name: "Superman",              muscle: "Back",        vid: "cc6UVNTKZAA"  },
+  { name: "Mountain Climber",      muscle: "Cardio",      vid: "nmwgirgXLYM"  },
+  { name: "Burpee",                muscle: "Cardio",      vid: "dZgVxmf6jkA"  },
+  { name: "Jumping Jack",          muscle: "Cardio",      vid: "c4DAnQ6DtF8"  },
+  { name: "High Knee",             muscle: "Cardio",      vid: "8opcQdC-V-U"  },
+  { name: "Tricep Dip",            muscle: "Triceps",     vid: "0326dy_-CzM"  },
+  { name: "Dumbbell Curl",         muscle: "Biceps",      vid: "ykJmrZ5v0Oo"  },
+  { name: "Dumbbell Shoulder Press",muscle: "Shoulders",  vid: "qEwKCR5JCog"  },
+  { name: "Dumbbell Row",          muscle: "Back",        vid: "pYcpY20QaE8"  },
+  { name: "Dumbbell Squat",        muscle: "Legs",        vid: "Dy55_GsGGvU"  },
+  { name: "Dumbbell Lunge",        muscle: "Legs",        vid: "L8fvypPrzzs"  },
+  { name: "Hip Flexor Stretch",    muscle: "Flexibility", vid: "gX7I-j2JkCE"  },
+  { name: "Hamstring Stretch",     muscle: "Flexibility", vid: "7kFJtCJMqRs"  },
+  { name: "Child's Pose",          muscle: "Flexibility", vid: "qZ_KahQm4ac"  },
+  { name: "Cat-Cow",               muscle: "Flexibility", vid: "kqnua4rHVVA"  },
+  { name: "Downward Dog",          muscle: "Flexibility", vid: "j97SSGsnCAQ"  },
+  { name: "Pigeon Pose",           muscle: "Flexibility", vid: "Qq4MJMoaEWM"  },
+  { name: "Neck Roll",             muscle: "Flexibility", vid: "Zp-JfaLPMOk"  },
+  { name: "Shoulder Roll",         muscle: "Flexibility", vid: "y7s3BfObUPM"  },
+];
+
+const EXERCISE_NAME_LIST = EXERCISE_LIBRARY.map(e => e.name).join(", ");
+
+const GYM_PLAN_SCHEMA = {
+  type: "object",
+  properties: {
+    weeks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          weekStart: { type: "string" },
+          days: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                date: { type: "string" },
+                type: { type: "string", enum: ["off", "pairing", "layover", "rest"] },
+                workout: {
+                  type: ["object", "null"],
+                  properties: {
+                    title: { type: "string" },
+                    duration: { type: "string" },
+                    exercises: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          name: { type: "string" },
+                          sets: { type: "number" },
+                          reps: { type: "string" },
+                          notes: { type: "string" },
+                        },
+                        required: ["name", "sets", "reps", "notes"],
+                      },
+                    },
+                  },
+                  required: ["title", "duration", "exercises"],
+                },
+              },
+              required: ["date", "type", "workout"],
+            },
+          },
+        },
+        required: ["weekStart", "days"],
+      },
+    },
+  },
+  required: ["weeks"],
+};
+
+app.post("/api/gym-plan/generate", apiLimiter, async (req, res) => {
+  try {
+    const { email, pairings, profile, lang } = req.body;
+    if (!email || !Array.isArray(pairings) || pairings.length === 0) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const goals = (profile?.goals || ["energy"]).join(", ");
+    const pairingLines = pairings.map(p => {
+      const start = p.pairingDate ? new Date(p.pairingDate).toISOString().split("T")[0] : "?";
+      const end   = p.returnDate  ? new Date(p.returnDate).toISOString().split("T")[0]  : "?";
+      return `  - ${start} to ${end}: ${p.departure} → ${(p.destinations||[]).join(" → ")} (${p.pairingDays || 1} days)`;
+    }).join("\n");
+
+    const prompt = `You are a fitness coach for flight crew. Create a monthly gym plan tailored to their roster.
+
+Goals: ${goals}
+Position: ${profile?.position || "cabin"}
+
+Roster schedule:
+${pairingLines}
+
+Rules:
+- "off" days (not in any pairing): 40-50 min full workout, 5-6 exercises
+- "layover" days (hotel, mid-pairing): 20 min hotel circuit, 4-5 bodyweight exercises only
+- "pairing" days (departure/arrival day of a trip): 15 min stretch/mobility only, 3-4 exercises from Flexibility
+- "rest" days (day after long trip): rest — set workout to null
+
+Use ONLY these exercise names (exact spelling): ${EXERCISE_NAME_LIST}
+
+Cover the calendar from today through the last return date. Group into weeks starting Monday.
+Return compact JSON, no commentary.`;
+
+    const message = await client.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 3000,
+      output_config: { format: { type: "json_schema", schema: GYM_PLAN_SCHEMA } },
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const u = message.usage;
+    if (u) console.log(`[gym-plan] in=${u.input_tokens} out=${u.output_tokens}`);
+
+    const plan = extractJSON(message);
+
+    // Attach videoId + muscle to each exercise from the library
+    const libMap = Object.fromEntries(EXERCISE_LIBRARY.map(e => [e.name, e]));
+    for (const week of plan.weeks || []) {
+      for (const day of week.days || []) {
+        for (const ex of day.workout?.exercises || []) {
+          const lib = libMap[ex.name];
+          if (lib) { ex.vid = lib.vid; ex.muscle = lib.muscle; }
+        }
+      }
+    }
+
+    // Store in CRUD backend (fire-and-forget)
+    const month = new Date(pairings[0].pairingDate).toISOString().slice(0, 7);
+    crudInternal("/api/gym-plan/store", { email, month, plan }).catch(e => console.error("gym-plan store error:", e.message));
+
+    res.json({ ok: true, plan });
+  } catch (err) {
+    handleAnthropicError(err, res);
+  }
+});
+
+// Relay gym plan fetch from frontend
+app.get("/api/gym-plan/get", apiLimiter, async (req, res) => {
+  try {
+    const { email, month } = req.query;
+    if (!email || !month) return res.status(400).json({ error: "Missing email or month" });
+    const r = await fetch(`${CRUD_API_BASE}/api/gym-plan/get?email=${encodeURIComponent(email)}&month=${month}`, {
+      headers: { "x-internal-key": INTERNAL_API_KEY },
+    });
+    const d = await r.json();
+    res.json(d);
+  } catch (err) {
+    console.error("gym-plan get relay error:", err.message);
+    res.status(502).json({ error: "Failed to fetch gym plan" });
+  }
+});
+
 // Relay roster store from frontend → CRUD backend (keeps internal key server-side)
 app.post("/api/roster/store-pairings", apiLimiter, async (req, res) => {
   try {
