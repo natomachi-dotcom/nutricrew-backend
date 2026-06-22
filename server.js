@@ -1289,22 +1289,26 @@ const EXERCISE_NAME_LIST = EXERCISE_LIBRARY.map(e => e.name).join(", ");
 
 const GYM_PLAN_SCHEMA = {
   type: "object",
+  additionalProperties: false,
   properties: {
     weeks: {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: {
           weekStart: { type: "string" },
           days: {
             type: "array",
             items: {
               type: "object",
+              additionalProperties: false,
               properties: {
                 date: { type: "string" },
                 type: { type: "string", enum: ["off", "pairing", "layover", "rest"] },
                 workout: {
                   type: ["object", "null"],
+                  additionalProperties: false,
                   properties: {
                     title: { type: "string" },
                     duration: { type: "string" },
@@ -1312,6 +1316,7 @@ const GYM_PLAN_SCHEMA = {
                       type: "array",
                       items: {
                         type: "object",
+                        additionalProperties: false,
                         properties: {
                           name: { type: "string" },
                           sets: { type: "number" },
