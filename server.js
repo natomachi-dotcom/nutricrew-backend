@@ -53,20 +53,39 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const email = session.customer_email || session.metadata?.email;
-    if (email) {
-      try {
+  try {
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const email = session.customer_email || session.metadata?.email;
+      if (email) {
         await fetch(`${CRUD_API_BASE}/api/set-premium`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
-          body: JSON.stringify({ email }),
+          body: JSON.stringify({
+            email,
+            stripeCustomerId: session.customer || null,
+            stripeSubscriptionId: session.subscription || null,
+          }),
         });
-      } catch (err) {
-        console.error("Failed to set premium after payment:", err.message);
       }
+    } else if (event.type === "customer.subscription.deleted") {
+      const subscription = event.data.object;
+      await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+        body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium: false }),
+      });
+    } else if (event.type === "customer.subscription.updated") {
+      const subscription = event.data.object;
+      const isPremium = ["active", "trialing"].includes(subscription.status);
+      await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+        body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium }),
+      });
     }
+  } catch (err) {
+    console.error("Stripe webhook handling failed:", err.message);
   }
 
   res.json({ received: true });
@@ -1517,25 +1536,27 @@ app.post("/api/roster/store-pairings", apiLimiter, async (req, res) => {
 
 app.post("/api/create-checkout-session", async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, plan } = req.body;
     if (!email || !EMAIL_REGEX.test((email || "").toLowerCase().trim())) {
       return res.status(400).json({ error: "Missing or invalid email" });
     }
     if (!stripe) {
       return res.status(503).json({ error: "Payments not configured" });
     }
+    const isAnnual = plan === "annual";
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
-      mode: "payment",
+      mode: "subscription",
       customer_email: email.toLowerCase().trim(),
       metadata: { email: email.toLowerCase().trim() },
       line_items: [{
         price_data: {
           currency: "usd",
-          unit_amount: 999,
+          unit_amount: isAnnual ? 6232 : 799, // annual is 35% off 12 months at $7.99
+          recurring: { interval: isAnnual ? "year" : "month" },
           product_data: {
-            name: "NutriCrew Premium",
-            description: "Unlimited meal plans, calorie deficit plans & nearby stores/restaurants.",
+            name: isAnnual ? "NutriCrew Premium (Annual)" : "NutriCrew Premium (Monthly)",
+            description: "Unlimited meal plans, gym plans, roster automation, calorie deficit, jetlag meal plans & nearby stores/restaurants.",
           },
         },
         quantity: 1,
