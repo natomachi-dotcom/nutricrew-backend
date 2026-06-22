@@ -1126,11 +1126,22 @@ const ROSTER_SCHEMA = {
 // Parse roster image(s) with Haiku vision
 app.post("/api/roster/parse", apiLimiter, async (req, res) => {
   try {
-    const { images, homeBase, lang } = req.body;
+    const { images, homeBase, lang, email } = req.body;
     if (!Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: "Missing images array" });
     }
     if (images.length > 4) return res.status(400).json({ error: "Max 4 images" });
+    if (!email || !EMAIL_REGEX.test((email || "").toLowerCase().trim())) {
+      return res.status(400).json({ error: "Missing or invalid 'email'" });
+    }
+
+    const usage = await checkPairingUsage(email.toLowerCase().trim(), "");
+    if (!usage.isPremium) {
+      return res.status(403).json({
+        error: "premium_required",
+        message: "Roster upload is a Premium feature. Upgrade to Premium to unlock this and more.",
+      });
+    }
 
     const imageContent = images.map(({ data, mediaType }) => ({
       type: "image",
@@ -1339,6 +1350,14 @@ app.post("/api/gym-plan/generate", apiLimiter, async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    const usage = await checkPairingUsage(email.toLowerCase().trim(), profile?.name);
+    if (!usage.isPremium) {
+      return res.status(403).json({
+        error: "premium_required",
+        message: "Gym plans are a Premium feature. Upgrade to Premium to unlock this and more.",
+      });
+    }
+
     const goals = (profile?.goals || ["energy"]).join(", ");
     const pairingLines = pairings.map(p => {
       const start = p.pairingDate ? new Date(p.pairingDate).toISOString().split("T")[0] : "?";
@@ -1414,6 +1433,62 @@ app.get("/api/gym-plan/get", apiLimiter, async (req, res) => {
   }
 });
 
+// ─── JETLAG MEAL PLAN (premium) ────────────────────────────────────────────
+
+const JETLAG_PLAN_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    schedule: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          actions: { type: "array", items: { type: "string" } },
+        },
+        required: ["label", "actions"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "schedule"],
+  additionalProperties: false,
+};
+
+app.post("/api/jetlag-plan", apiLimiter, async (req, res) => {
+  try {
+    const { email, departure, destination, timezone, diets, lang } = req.body;
+    if (!email || !EMAIL_REGEX.test((email || "").toLowerCase().trim())) {
+      return res.status(400).json({ error: "Missing or invalid 'email'" });
+    }
+    if (!departure || !destination) return res.status(400).json({ error: "Missing departure or destination" });
+    const tz = parseInt(timezone, 10) || 0;
+    if (Math.abs(tz) < 4) return res.status(400).json({ error: "No significant jetlag for this timezone difference" });
+
+    const usage = await checkPairingUsage(email.toLowerCase().trim(), "");
+    if (!usage.isPremium) {
+      return res.status(403).json({
+        error: "premium_required",
+        message: "The personalized jetlag meal plan is a Premium feature. Upgrade to Premium to unlock this and more.",
+      });
+    }
+
+    const direction = tz > 0 ? "eastward (destination is ahead in time)" : "westward (destination is behind in time)";
+    const dietLine = Array.isArray(diets) && diets.length ? diets.join(", ") : "no restrictions";
+    const prompt = `Create a short, practical jetlag meal-timing plan for a flight crew member flying ${direction}, ${Math.abs(tz)} hours time difference, from ${departure} to ${destination}. Diet: ${dietLine}.
+
+Cover: the travel day, plus the first 2 days at the destination. For each entry give a label (e.g. "Travel day", "Day 1 in ${destination}") and 2-4 short, concrete meal-timing actions stated in destination local time (specific times, what to eat or avoid, hydration, caffeine cutoff). Be specific to the direction and size of the time difference — no generic advice.
+
+Respond in ${lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English"}. Return compact JSON, no commentary.`;
+
+    const result = await runStructured(prompt, JETLAG_PLAN_SCHEMA, 900, FAST_MODEL);
+    res.json(result);
+  } catch (err) {
+    handleAnthropicError(err, res);
+  }
+});
+
 // Relay roster store from frontend → CRUD backend (keeps internal key server-side)
 app.post("/api/roster/store-pairings", apiLimiter, async (req, res) => {
   try {
@@ -1421,6 +1496,15 @@ app.post("/api/roster/store-pairings", apiLimiter, async (req, res) => {
     if (!email || !Array.isArray(pairings) || pairings.length === 0) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+
+    const usage = await checkPairingUsage(email.toLowerCase().trim(), profile?.name);
+    if (!usage.isPremium) {
+      return res.status(403).json({
+        error: "premium_required",
+        message: "Roster automation is a Premium feature. Upgrade to Premium to unlock this and more.",
+      });
+    }
+
     const r = await crudInternal("/api/roster/store", { email, pairings, profile });
     res.json(r);
   } catch (err) {
