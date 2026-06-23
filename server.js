@@ -347,7 +347,7 @@ function generatePlanEmailHTML(name, lang, destLabel) {
     <div style="font-size:20px;font-weight:bold;color:#0A1628;margin-bottom:8px;">${L.greeting}, ${name}!</div>
     <div style="font-size:17px;color:#333;line-height:1.6;margin-bottom:20px;">Your <strong>${destLabel}</strong> meal plan ${L.intro}</div>
     <div style="font-size:15px;color:#666;line-height:1.7;margin-bottom:28px;">${L.body}</div>
-    <a href="${FRONTEND_URL}" style="display:inline-block;background:#C9A84C;color:#07101E;text-decoration:none;font-size:16px;font-weight:700;padding:16px 36px;border-radius:12px;">${L.cta} →</a>
+    <a href="${FRONTEND_URL}?plan=1" style="display:inline-block;background:#C9A84C;color:#07101E;text-decoration:none;font-size:16px;font-weight:700;padding:16px 36px;border-radius:12px;">${L.cta} →</a>
   </td></tr>
 
   <tr><td style="background:#0A1628;padding:24px 32px;text-align:center;">
@@ -935,10 +935,16 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       isPremium: usage.isPremium,
     };
 
-    const destLabel = Array.isArray(data.destinations) ? data.destinations.join(" → ") : (data.destinations || "your destination");
-    sendPlanEmail(email, data.name, lang || "en", destLabel).catch(err =>
-      console.error("Plan email failed:", err.message)
-    );
+    // Only the roster-automation flow can deep-link the email back to the plan
+    // (it's the only one that persists the plan server-side under a token) — for
+    // in-app generation the user is already looking at the plan, so emailing them
+    // a link that can't deep-link anywhere would just be confusing.
+    if (data.source === "roster") {
+      const destLabel = Array.isArray(data.destinations) ? data.destinations.join(" → ") : (data.destinations || "your destination");
+      sendPlanEmail(email, data.name, lang || "en", destLabel).catch(err =>
+        console.error("Plan email failed:", err.message)
+      );
+    }
 
     res.json(planResponse);
   } catch (err) {
