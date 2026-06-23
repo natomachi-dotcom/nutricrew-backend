@@ -22,6 +22,8 @@ const ALLOWED_ORIGINS = [
   "https://nutricrew-frontend.vercel.app",
   "https://nutricrew-frontend-natomachi-dotcoms-projects.vercel.app",
   "https://nutricrew-frontend-natomachi-dotcom-natomachi-dotcoms-projects.vercel.app",
+  "https://nutricrew.ca",
+  "https://www.nutricrew.ca",
 ];
 const PREVIEW_ORIGIN_REGEX = /^https:\/\/nutricrew-frontend-[a-z0-9]+-natomachi-dotcoms-projects\.vercel\.app$/;
 const LOCALHOST_ORIGIN_REGEX = /^http:\/\/localhost(:\d+)?$/;
