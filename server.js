@@ -415,6 +415,23 @@ function estimateGainTarget(data) {
   return Math.round((tdee + 400) / 50) * 50;
 }
 
+// Numeric budget alone doesn't tell the model which ingredients are
+// realistic — without this, it'll happily suggest salmon and steak on a
+// $15/day budget because nothing tells it those don't fit.
+const BUDGET_GUIDANCE = {
+  low: `BUDGET DISCIPLINE (low budget) — every meal must be realistically achievable within the stated budget. Build meals around affordable staples: rice, pasta, beans, lentils, eggs, canned tuna/chicken, frozen or seasonal vegetables, oats, potatoes, store-brand pantry items. Do NOT use premium proteins (steak, salmon, shrimp, lamb), out-of-season produce, or specialty/imported ingredients — they don't fit this budget.`,
+  medium: `BUDGET (moderate) — a mix of fresh proteins (chicken, eggs, fish, pork) and pantry staples fits this budget. Occasional moderately-priced ingredients are fine; don't rely on premium cuts (steak, salmon, lamb) for every meal.`,
+  high: `BUDGET (generous) — premium ingredients (salmon, steak, specialty produce, organic items) are appropriate and welcome where they fit the diet and goals.`,
+  none: ``,
+};
+
+// Recipe complexity should match how much the crew member wants to cook —
+// "simple" should mean genuinely fewer steps/ingredients, not just a label.
+const COOKING_PREF_GUIDANCE = {
+  enjoys_cooking: `COOKING STYLE — this crew member enjoys cooking. Recipes may include multiple steps, more involved techniques (searing, marinating, sauce-making), and longer ingredient lists where it fits their kitchen access.`,
+  simple_recipes: `COOKING STYLE — this crew member wants simple, low-effort recipes. Every meal must use 5 ingredients or fewer (excluding salt/pepper/oil) and no more than 2 prep steps (e.g. "season and pan-fry", "mix and chill"). No marinating, no multi-component sauces, no advanced techniques.`,
+};
+
 const KITCHEN_ACCESS_RULES = {
   full_kitchen: `full_kitchen: Full kitchen (stove, oven, fridge, cookware). All cooking methods OK.`,
   hotel: `hotel: NO kitchen — no stove, oven, or any cooking equipment. Meals MUST be no-cook (ready-to-eat, assembled from pre-cooked/store-bought items, or grab-and-go). "prep" = assembly/slicing/opening only. NEVER mention cooking, heating on a stove, or baking. REFRIGERATION: for any perishable ingredient (fresh proteins, dairy, cut produce, pre-cooked items), add a note in the "tip" field stating it needs refrigeration — advise the crew member to request a hotel mini-fridge or to consume the item within 2 hours of purchase if no fridge is available.`,
@@ -573,6 +590,8 @@ function buildContext(data, lang, pairingDays) {
   const budgetLine = hasBudget
     ? `$${data.budget_amount} per ${data.budget_type === "total" ? `trip (~$${perDayBudget.toFixed(2)}/day across ${pairingDays} days)` : "day"}`
     : "open (no specific limit)";
+  const budgetLevel = !hasBudget ? "none" : perDayBudget > 50 ? "high" : perDayBudget > 20 ? "medium" : "low";
+  const budgetGuidance = BUDGET_GUIDANCE[budgetLevel];
 
   const kitchenAccessBlock = buildKitchenAccessBlock(data.kitchen);
   const dietRules = getDietRules(rawDiets, calorieTarget);
@@ -586,6 +605,7 @@ function buildContext(data, lang, pairingDays) {
   const lunchBagMap = { small: "Small (~4L, fits 1–2 containers)", medium: "Medium (~6L, fits 2–3 containers)", large: "Large (~10L, fits 3–4 containers + extras)" };
   const lunchBag = data.lunch_bag ? lunchBagMap[data.lunch_bag] || data.lunch_bag : null;
   const airplaneMealDesc = (data.airplane_meal_description || "").trim() || null;
+  const cookingGuidance = COOKING_PREF_GUIDANCE[data.cooking_pref] || "";
 
   const profile = `CREW PROFILE:
 - Name: ${data.name}, Position: ${data.position}, Gender: ${data.gender}${ageStr}
@@ -597,7 +617,7 @@ function buildContext(data, lang, pairingDays) {
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance };
 }
 
 function buildAllDaysPrompt(data, pairingDays, ctx) {
@@ -620,7 +640,7 @@ ${ctx.profile}
 ${ctx.kitchenAccessBlock}
 
 ${ctx.dietRules}
-
+${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}${ctx.cookingGuidance ? `\n${ctx.cookingGuidance}\n` : ""}
 Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. Return a JSON object with a "days" array of exactly ${pairingDays} day object(s), in order.
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
@@ -655,7 +675,7 @@ ${ctx.profile}
 ${ctx.kitchenAccessBlock}
 
 ${ctx.dietRules}
-
+${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}
 Daily itinerary:
 ${itinerary}
 
@@ -773,6 +793,7 @@ function buildCacheKey(data, ctx, lang) {
     budgetLevel,
     kitchenKey: kitchen.join(",") || "full_kitchen",
     calorieTargetKey: ct,
+    cookingKey: data.cooking_pref || "none",
     lang: lang || "en",
   };
 }
