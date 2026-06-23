@@ -146,6 +146,15 @@ const otpLimiter = rateLimit({
   message: { error: "Too many code requests. Please try again in 15 minutes." },
 });
 
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.body?.email?.toLowerCase().trim() || ipKeyGenerator(req.ip),
+  message: { error: "Too many login attempts. Please try again in 15 minutes." },
+});
+
 const MEAL_SCHEMA = {
   type: "object",
   properties: {
@@ -715,7 +724,7 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
 
     // Email already verified — return a fresh session token directly, no code needed.
     if (storeData.alreadyVerified) {
-      return res.json({ alreadyVerified: true, token: storeData.token, email: storeData.email, name: storeData.name, isPremium: storeData.isPremium, pairingCount: storeData.pairingCount });
+      return res.json({ alreadyVerified: true, token: storeData.token, email: storeData.email, name: storeData.name, isPremium: storeData.isPremium, pairingCount: storeData.pairingCount, hasPassword: storeData.hasPassword });
     }
 
     if (process.env.RESEND_API_KEY) {
@@ -754,6 +763,52 @@ app.post("/api/auth/verify-otp", async (req, res) => {
   } catch (err) {
     console.error("verify-otp error:", err.message);
     res.status(500).json({ error: "Verification failed. Please try again." });
+  }
+});
+
+app.post("/api/auth/login-password", loginLimiter, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: "Valid email is required." });
+    }
+    if (!password || typeof password !== "string") {
+      return res.status(400).json({ error: "Password is required." });
+    }
+
+    const checkRes = await fetch(`${CRUD_API_BASE}/api/auth/check-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+      body: JSON.stringify({ email: email.toLowerCase().trim(), password }),
+    });
+    const data = await checkRes.json();
+    if (!checkRes.ok) return res.status(checkRes.status).json(data);
+    res.json(data);
+  } catch (err) {
+    console.error("login-password error:", err.message);
+    res.status(500).json({ error: "Login failed. Please try again." });
+  }
+});
+
+// Requires a valid existing session token as proof of identity — used both
+// right after OTP verification (set first password) and later from the profile (change password).
+app.post("/api/auth/set-password", async (req, res) => {
+  try {
+    const { email, password, token } = req.body;
+    if (!email || !password || !token) {
+      return res.status(400).json({ error: "Email, password and token are required." });
+    }
+    const setRes = await fetch(`${CRUD_API_BASE}/api/auth/set-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+      body: JSON.stringify({ email: email.toLowerCase().trim(), password, token }),
+    });
+    const data = await setRes.json();
+    if (!setRes.ok) return res.status(setRes.status).json(data);
+    res.json(data);
+  } catch (err) {
+    console.error("set-password error:", err.message);
+    res.status(500).json({ error: "Failed to set password. Please try again." });
   }
 });
 
