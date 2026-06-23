@@ -1520,10 +1520,24 @@ app.post("/api/places", async (req, res) => {
       return res.status(403).json({ error: "premium_required" });
     }
 
+    // Same destination gets looked up by every crew member who flies it —
+    // cache by city so repeat tab-opens (including re-opening the Nearby tab
+    // in the same session) don't re-bill two Google Places calls each time.
+    const cityKey = city.toLowerCase().trim();
+    const cached = await crudInternal("/api/places-cache/query", { cityKey }).catch(() => ({ hit: false }));
+
+    if (cached.hit) {
+      return res.json({ groceries: cached.groceries, restaurants: cached.restaurants });
+    }
+
     const [groceries, restaurants] = await Promise.all([
       fetchPlaces(`grocery store near ${city}`),
       fetchPlaces(`healthy restaurant near ${city}`),
     ]);
+
+    crudInternal("/api/places-cache/store", { cityKey, groceries, restaurants }).catch(e =>
+      console.error("places-cache/store failed:", e.message)
+    );
 
     res.json({ groceries, restaurants });
   } catch (err) {
