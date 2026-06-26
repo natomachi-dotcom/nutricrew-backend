@@ -642,6 +642,36 @@ function buildAllDaysPrompt(data, pairingDays, ctx) {
     return `Day ${dayNum} — Location: ${loc}. ${budgetLine} ${jetlagInstr}`;
   }).join("\n");
 
+  const usaCustomsBlock = data.going_usa === "yes" ? `
+USA CUSTOMS RESTRICTIONS — MANDATORY (US CBP / USDA rules):
+This crew member is traveling TO the USA. The items below are PROHIBITED by US Customs and Border Protection and the USDA from entering the country. They MUST NOT appear in any packed meal, ingredient list, or snack suggestion for this trip.
+
+PROHIBITED — do NOT include in any meal:
+- Fresh fruits of any kind (apples, oranges, mangoes, bananas, grapes, berries, stone fruits, citrus, etc.)
+- Fresh vegetables of any kind (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)
+- Fresh herbs with roots or soil attached
+- Raw or undercooked meat, poultry, or seafood of any kind
+- Raw eggs or hard-boiled eggs in the shell
+- Unpasteurized / fresh dairy (raw milk, soft fresh cheeses like ricotta or cottage cheese in unsealed containers, unsealed yogurt)
+- Any item with soil attached
+- Rice with husks
+
+ALLOWED alternatives to use instead:
+- Commercially packaged, factory-sealed shelf-stable foods
+- Cooked meats that are vacuum-sealed / commercially processed (e.g. sealed deli pouches, canned tuna, canned chicken)
+- Hard cheeses in sealed commercial packaging (cheddar, parmesan, gouda, etc.)
+- Pasteurized dairy in factory-sealed containers (e.g. packaged Greek yogurt, sealed milk cartons)
+- Dried fruits and nuts in sealed factory packages
+- Packaged baked goods, crackers, bread, protein bars, granola bars
+- Canned or jarred foods (canned beans, canned vegetables, jarred nut butter)
+- Instant noodles, packaged oats, sealed granola, packaged trail mix
+- Coffee and tea (packaged), chocolate (sealed), packaged candy
+- Dried pasta, rice, and grains in sealed packages
+- Shelf-stable sauces and condiments in sealed commercial packaging
+
+Build ALL meals for this trip using only ALLOWED items above. Never suggest a fresh fruit, fresh vegetable, or raw protein as a packable item.
+` : "";
+
   return `You are a professional nutritionist specializing in aviation crew health.
 
 ${ctx.profile}
@@ -649,7 +679,7 @@ ${ctx.profile}
 ${ctx.kitchenAccessBlock}
 
 ${ctx.dietRules}
-${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}${ctx.cookingGuidance ? `\n${ctx.cookingGuidance}\n` : ""}
+${usaCustomsBlock}${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}${ctx.cookingGuidance ? `\n${ctx.cookingGuidance}\n` : ""}
 Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. Return a JSON object with a "days" array of exactly ${pairingDays} day object(s), in order.
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
@@ -692,7 +722,7 @@ Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pa
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ctx.gainTarget ? `, noting that it targets a calorie surplus (~${ctx.gainTarget} kcal/day) to support healthy weight and muscle gain` : ""}.
-- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
+- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}${data.going_usa === "yes" ? ". USA CUSTOMS: this trip goes to the USA — the grocery list MUST NOT include fresh fruits, fresh vegetables, raw meats, raw eggs, or unsealed fresh dairy, as these are prohibited by US CBP/USDA from entering the country. Only list commercially packaged, shelf-stable, or sealed items that are permitted through US customs." : ""}.
 - "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
 }
 
