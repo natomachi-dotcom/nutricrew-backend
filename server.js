@@ -643,43 +643,25 @@ function buildAllDaysPrompt(data, pairingDays, ctx) {
   }).join("\n");
 
   const usaCustomsBlock = data.going_usa === "yes" ? `
-USA CUSTOMS RESTRICTIONS — MANDATORY (US CBP / USDA rules):
-This crew member is traveling TO the USA. The items below are PROHIBITED by US Customs and Border Protection and the USDA from entering the country. They MUST NOT appear in any packed meal, ingredient list, or snack suggestion for this trip.
-
-PROHIBITED — do NOT include in any meal:
-- Fresh fruits of any kind (apples, oranges, mangoes, bananas, grapes, berries, stone fruits, citrus, etc.)
-- Fresh vegetables of any kind (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)
-- Fresh herbs with roots or soil attached
-- Raw or undercooked meat, poultry, or seafood of any kind
+⚠️ HARD RULE — US BORDER CROSSING: Every single meal and ingredient in this plan MUST be legal to carry across the US border (US CBP / USDA rules). Do NOT include anything from this list in ANY meal, ingredient, or snack:
+- Any fresh fruit (apples, oranges, mangoes, bananas, grapes, berries, citrus, stone fruits, etc.)
+- Any fresh vegetable (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)
+- Raw meat, poultry, or seafood of any kind
 - Raw eggs or hard-boiled eggs in the shell
-- Unpasteurized / fresh dairy (raw milk, soft fresh cheeses like ricotta or cottage cheese in unsealed containers, unsealed yogurt)
-- Any item with soil attached
-- Rice with husks
+- Unpasteurized dairy or soft fresh cheese (ricotta, cottage cheese) in unsealed containers
+- Fresh herbs with roots or soil
 
-ALLOWED alternatives to use instead:
-- Commercially packaged, factory-sealed shelf-stable foods
-- Cooked meats that are vacuum-sealed / commercially processed (e.g. sealed deli pouches, canned tuna, canned chicken)
-- Hard cheeses in sealed commercial packaging (cheddar, parmesan, gouda, etc.)
-- Pasteurized dairy in factory-sealed containers (e.g. packaged Greek yogurt, sealed milk cartons)
-- Dried fruits and nuts in sealed factory packages
-- Packaged baked goods, crackers, bread, protein bars, granola bars
-- Canned or jarred foods (canned beans, canned vegetables, jarred nut butter)
-- Instant noodles, packaged oats, sealed granola, packaged trail mix
-- Coffee and tea (packaged), chocolate (sealed), packaged candy
-- Dried pasta, rice, and grains in sealed packages
-- Shelf-stable sauces and condiments in sealed commercial packaging
-
-Build ALL meals for this trip using only ALLOWED items above. Never suggest a fresh fruit, fresh vegetable, or raw protein as a packable item.
+Only use ingredients that are commercially packaged and sealed, canned, dried, or fully shelf-stable. Examples: canned tuna, canned chicken, sealed deli pouches, hard cheese in sealed packaging, sealed pasteurized dairy, dried fruits, nuts, granola bars, crackers, packaged bread, canned beans, instant oats, packaged trail mix. This rule overrides all other preferences — if a food is prohibited at the US border, never include it.
 ` : "";
 
   return `You are a professional nutritionist specializing in aviation crew health.
-
+${usaCustomsBlock}
 ${ctx.profile}
 
 ${ctx.kitchenAccessBlock}
 
 ${ctx.dietRules}
-${usaCustomsBlock}${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}${ctx.cookingGuidance ? `\n${ctx.cookingGuidance}\n` : ""}
+${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}${ctx.cookingGuidance ? `\n${ctx.cookingGuidance}\n` : ""}
 Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. Return a JSON object with a "days" array of exactly ${pairingDays} day object(s), in order.
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
