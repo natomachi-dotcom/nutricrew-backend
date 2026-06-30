@@ -1134,121 +1134,497 @@ const ROSTER_SCHEMA = {
 // vision model can recognise which format it's looking at and extract
 // pairings more accurately from each one.
 const ROSTER_FORMAT_GUIDE = `
-ROSTER FORMAT KNOWLEDGE BASE — use this to identify the airline/system before extracting pairings.
+========================================================
+ROSTER PAIRING EXTRACTION GUIDE
+========================================================
+Your PRIMARY job is to accurately read PAIRING DATA from the image.
+Follow these steps in order.
 
-=== SCHEDULING SYSTEMS ===
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — LOCATE THE DATE AXIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Most rosters are monthly grids. Find the row or column that contains
+the numbers 1 through 28/29/30/31. This is the DATE AXIS.
 
-NETLINE/CREW (Lufthansa Systems)
-Airlines: Air Canada, Swiss, Brussels, Lufthansa, Eurowings, SAS, TAP, many others.
-Layout: Monthly grid. Dates (1–31) run across the top row. Crew name/employee ID at top. Each column is one day.
-Key codes: SBY/STB=Standby OFF/DO=Day-off AL/VAC=Leave TRG=Training PA####=Pairing number
-Pairing blocks: span multiple columns (days), show IATA codes and times inside the block.
-Look for: row of numbers 1–31 at top, color blocks spanning several days, 2–4 letter IATA codes inside blocks.
+• HORIZONTAL grid (most common): dates run LEFT→RIGHT across the top.
+  Each vertical column = one calendar day.
+  Example header: |  1 |  2 |  3 |  4 |  5 |  6 |  7 | ...
 
-MAESTRO (Air Canada / Air Canada Rouge / Jazz)
-Airlines: AC, RV, QK.
-Layout: Monthly PDF or screen. "PA" prefix on pairing numbers (e.g. PA 4521). Layover cities listed inside pairing block.
-Codes: DO=Day-off, SBY/HSBY=Standby, TRG/GRD=Training, PAX=Positioning.
-Canadian hubs: YYZ, YUL, YVR, YYC, YEG, YHZ, YOW.
-Look for: "PA" prefix, Canadian IATA codes, Air Canada logo or "AC" flight numbers.
+• VERTICAL/LIST format: dates run TOP→BOTTOM on the left side.
+  Each horizontal row = one calendar day.
 
-WESTJET (WestJet Airlines / Swoop)
-Airlines: WS, WO.
-Layout: Grid or list. Pairings numbered without prefix or with "WS". Full route shown (e.g. YYC-LAS-YYC).
-Codes: RD=Regular Day Off, DO=Day-off, SBY=Standby, TRG=Training.
-Hubs: YYC, YYZ, YEG, YVR, YHM.
-Look for: "RD" code for days off, route strings with dashes (YYC-LAS), WestJet or Swoop branding.
+• WEEK-BASED format: shows 7-day rows with day abbreviations (MON TUE WED...).
+  Count weeks to determine the actual calendar dates.
 
-PORTER AIRLINES
-Airlines: PD.
-Aircraft: Embraer E195-E2 (mainline) and Dash 8-400 (regional).
-Layout: Monthly calendar grid. Pairing numbers with PD prefix or numeric.
-Hubs/Bases: YTZ (Billy Bishop Toronto — original base), YYZ (Toronto Pearson — E195-E2 operations), YOW (Ottawa), YUL (Montreal), YHZ (Halifax), YQB (Quebec City).
-US destinations (goingUsa = yes): EWR (Newark), BOS (Boston), ORD (Chicago), IAD/DCA (Washington), FLL (Fort Lauderdale), MCO (Orlando), TPA (Tampa), SRQ (Sarasota), RSW (Fort Myers), PBI (West Palm Beach), BDL (Hartford), BTV (Burlington VT).
-Codes: DO/RD=Day-off, SBY=Standby, TRG=Training.
-Look for: YTZ or YYZ combined with PD pairing numbers, Embraer E195 or Dash 8 references, Porter branding/logo.
+Also find the MONTH and YEAR — usually in a header above the grid
+(e.g. "JUNE 2025", "JUN 25", "06/2025"). You need this to convert
+day numbers into full YYYY-MM-DD dates.
 
-DELTA AIR LINES CCS
-Airlines: DL, 9E (Endeavor), OO (SkyWest codeshare).
-Layout: Monthly calendar or list. Numeric pairing codes.
-Codes: DO=Day-off, RD=Reserve Day-off, R####=Reserve pairing, GTC/OE=Training.
-Hubs: ATL, DTW, MSP, SLC, BOS, LGA, JFK, SEA, LAX, CVG.
-Look for: ATL or DTW codes, Delta "DL" flight numbers, blue color scheme.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — IDENTIFY PAIRING BLOCKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Pairing blocks are the COLORED or SHADED rectangular cells that span
+one or more days. They represent a work trip away from home base.
 
-UNITED AIRLINES (FLICA / Jeppesen Crew)
-Airlines: UA, OO (United Express).
-Layout: Monthly view, color-coded. Pairings with numeric ID.
-Codes: DO=Day-off, OFF=Day-off, RES/RSV=Reserve, TRN=Training.
-Hubs: ORD, IAH, EWR, DEN, IAD, LAX, SFO, GUM.
-Look for: United "UA" flight numbers, ORD/EWR/IAH hub codes.
+What a pairing block looks like:
+• Colored background (blue, green, yellow, orange, teal, etc.)
+• Contains: a pairing number (e.g. "PA 4521", "3421", "WS 201")
+• Contains: airport IATA codes showing the route (e.g. "YYZ LHR", "YVR-LAS-YVR")
+• Contains: departure/arrival times (e.g. "0645", "14:30", "2315")
+• May span 1 day (outstation turn) or 2–5+ days (multi-day pairing)
+• The block STARTS on the departure date and ENDS on the return date
 
-AMERICAN AIRLINES (Sabre-based)
-Airlines: AA, MQ (Envoy), YV (Mesa), OH (PSA).
-Layout: Monthly or line-based view.
-Codes: DO=Day-off, RD=Reserve Day-off, RES=Reserve.
-Hubs: DFW, CLT, PHL, MIA, ORD, LAX, JFK, PHX, DCA, BOS.
-Look for: DFW or MIA codes, "AA" flight numbers, American Airlines branding.
+What is NOT a pairing block (ignore these):
+• White/empty cells = days off
+• Cells with ONLY codes: DO, OFF, RD, D/O, FR = day off
+• Cells with ONLY: SBY, STB, STBY, RSV, RES, HSBY = standby
+• Cells with ONLY: AL, VAC, HOL, LV = leave/vacation
+• Cells with ONLY: TRG, TRN, SIM, GRD, OE = training
 
-SOUTHWEST AIRLINES
-Airlines: WN.
-Layout: Point-based, calendar view, often shows "trip" blocks.
-Codes: DO/OFF=Day-off, SBY=Standby.
-Bases: DAL, HOU, ATL, BNA, BWI, MDW, DEN, LAS, LAX, MCO, OAK, PHX, SAN.
-Look for: Point-to-point routes with no hub pattern, WN flight numbers.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3 — EXTRACT DATES FROM EACH PAIRING BLOCK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each pairing block:
 
-BRITISH AIRWAYS (eCrew / NetLine)
-Airlines: BA, Iberia (IB).
-Layout: Monthly grid, similar to NetLine.
-Codes: DO=Day-off, DB=Day at Base, SBY/HSB=Standby, TRG/SIM=Training.
-Hubs: LHR, LGW, MAN.
-Look for: LHR/LGW codes, "BA" flight numbers, British Airways branding.
+1. Find which column(s)/row(s) it occupies on the date axis.
+2. pairingDate = the FIRST date column the block occupies → YYYY-MM-DD
+3. returnDate = the LAST date column the block occupies → YYYY-MM-DD
+4. pairingDays = returnDate − pairingDate + 1  (minimum 1)
 
-AIR FRANCE / KLM (Rave Crew Management)
-Airlines: AF, KL, TO (Transavia).
-Layout: Monthly calendar. French labels possible.
-Codes: CO/CONGE=Off, RP=Rest Period, ATTE/ATTD=Standby.
-Hubs: CDG, ORY (AF); AMS (KL).
-Look for: CDG/AMS codes, "AF" or "KL" flight numbers, French language labels.
+EXAMPLES:
+  Block spans columns 5, 6, 7 in June 2025:
+    pairingDate = 2025-06-05, returnDate = 2025-06-07, pairingDays = 3
 
-EMIRATES / ETIHAD / QATAR (AIMS-based)
-Airlines: EK, EY, QR.
-Layout: Monthly table. Pairing codes, hotel city shown for layovers.
-Codes: OFF=Day-off, SBY/STBY=Standby.
-Hubs: DXB (EK), AUH (EY), DOH (QR).
-Look for: DXB/AUH/DOH codes, Middle Eastern airline logos or flight numbers.
+  Block spans only column 12 in March 2026:
+    pairingDate = 2026-03-12, returnDate = 2026-03-12, pairingDays = 1
 
-RYANAIR / EASYJET (Jeppesen Crew)
-Airlines: FR, U2.
-Layout: Monthly calendar, very compact.
-Codes: OFF/D-O=Day-off, SBY/HOT=Standby.
-Bases: STN, LTN, BGY, ACE, and many European bases.
-Look for: European short-haul IATA codes, "FR" or "U2" flight numbers, European carrier branding.
+  Block spans columns 28, 29, 30, 31, 1 (wraps into next month):
+    If the last column is day 1 of NEXT month, use that month for returnDate.
+    e.g. block starts June 28 ends July 1 → pairingDate=2025-06-28, returnDate=2025-07-01, pairingDays=4
 
-LUFTHANSA GROUP (NetLine/Crew)
-Airlines: LH, LX (Swiss), OS (Austrian), SN (Brussels).
-Layout: NetLine/Crew monthly grid.
-Codes: FR=Free day, UU=Standby, SU=Sim, SD=Ground duty.
-Hubs: FRA, MUC (LH); ZRH (LX); VIE (OS); BRU (SN).
-Look for: FRA/MUC/ZRH/VIE codes, German/European flight numbers.
+IMPORTANT — count columns carefully:
+  If the block visually spans from under day "15" to under day "18",
+  that is 4 days: 15, 16, 17, 18. Do not guess — count each column.
 
-=== UNIVERSAL CODES — NEVER extract these as a pairing ===
-DO, OFF, RD, D/O, FR (Lufthansa), CO (Air France) = Day off
-SBY, STB, STBY, HSB, HSBY, HOT, ATTE, ATTD, RSV, RES = Standby / Reserve
-AL, VAC, HOL, CONGE = Annual leave / Vacation
-TRG, TRN, SIM, GRD, GTC, OE = Training / Simulator
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4 — EXTRACT ROUTE / DESTINATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Inside the pairing block, read any 3-letter IATA airport codes.
+The home base is always the departure on day 1 (provided separately).
+All other airports are destinations or layovers.
 
-=== HOW TO IDENTIFY PAIRING START AND END DATES ===
-- A pairing block spans from its first day to its last day on the calendar grid
-- pairingDays = number of days the block covers (minimum 1)
-- Departure date = first day of the block in YYYY-MM-DD
-- Return date = last day of the block in YYYY-MM-DD (same as departure if 1-day trip)
-- The crew member's homeBase (provided below) is the departure city for day 1 of each pairing
+Route reading examples:
+  "YYZ LHR YYZ" → destinations: ["London"]  (London Heathrow layover, return home)
+  "YVR-LAX-JFK" → destinations: ["Los Angeles", "New York"]
+  "YUL CDG NRT" → destinations: ["Paris", "Tokyo"]
+  "YYC LAS" → destinations: ["Las Vegas"]
 
-=== DESTINATION EXTRACTION ===
-- Look for 3-letter IATA codes inside pairing blocks (e.g. YYZ, LHR, DXB, ATL)
-- A sequence YYZ→LHR→DXB means layovers at LHR then DXB
-- Convert IATA codes to city names for the output (e.g. YYZ→Toronto, LHR→London, DXB→Dubai, CDG→Paris, ATL→Atlanta, ORD→Chicago)
-- goingUsa = "yes" if ANY destination IATA is a US airport (e.g. JFK, LAX, ORD, ATL, DFW, MIA, SFO, SEA, BOS, EWR, IAH, DEN, LAS, MCO, PHX, SAN, DTW, MSP, IAD, DCA, CLT, PHL, HOU, DAL, MDW, etc.)
+IATA → CITY NAME + TIMEZONE REFERENCE
+(Use this table to convert codes to city names and estimate timezone offset)
+
+CANADA:
+YYZ = Toronto (+0 from home if home is Toronto, else EST UTC-5/EDT UTC-4)
+YUL = Montreal (EST UTC-5 / EDT UTC-4)
+YVR = Vancouver (PST UTC-8 / PDT UTC-7)
+YYC = Calgary (MST UTC-7 / MDT UTC-6)
+YEG = Edmonton (MST UTC-7 / MDT UTC-6)
+YHZ = Halifax (AST UTC-4 / ADT UTC-3)
+YOW = Ottawa (EST UTC-5 / EDT UTC-4)
+YQB = Quebec City (EST UTC-5 / EDT UTC-4)
+YTZ = Toronto Billy Bishop (EST UTC-5 / EDT UTC-4)
+YWG = Winnipeg (CST UTC-6 / CDT UTC-5)
+YXE = Saskatoon (CST UTC-6 / CDT UTC-5)
+YQR = Regina (CST UTC-6 no DST)
+YZF = Yellowknife (MST UTC-7 / MDT UTC-6)
+YYT = St. John's (NST UTC-3:30 / NDT UTC-2:30)
+YHM = Hamilton Ontario (EST UTC-5 / EDT UTC-4)
+YKF = Waterloo (EST UTC-5 / EDT UTC-4)
+YQG = Windsor (EST UTC-5 / EDT UTC-4)
+YXU = London Ontario (EST UTC-5 / EDT UTC-4)
+YYB = North Bay (EST UTC-5 / EDT UTC-4)
+YSB = Sudbury (EST UTC-5 / EDT UTC-4)
+YTS = Timmins (EST UTC-5 / EDT UTC-4)
+YAM = Sault Ste. Marie (EST UTC-5 / EDT UTC-4)
+YTR = Trenton (EST UTC-5 / EDT UTC-4)
+
+USA — NORTHEAST:
+JFK = New York JFK (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+EWR = Newark New Jersey (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+LGA = New York LaGuardia (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+BOS = Boston (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+PHL = Philadelphia (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+IAD = Washington Dulles (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+DCA = Washington Reagan (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+BWI = Baltimore (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+BDL = Hartford/Springfield (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+BTV = Burlington Vermont (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+PIT = Pittsburgh (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+BUF = Buffalo (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+SYR = Syracuse (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+ALB = Albany (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+PWM = Portland Maine (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+MHT = Manchester NH (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+PVD = Providence RI (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+
+USA — SOUTHEAST:
+MIA = Miami (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+FLL = Fort Lauderdale (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+MCO = Orlando (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+TPA = Tampa (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+RSW = Fort Myers (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+PBI = West Palm Beach (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+SRQ = Sarasota (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+JAX = Jacksonville FL (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+SAV = Savannah (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+CLT = Charlotte NC (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+RDU = Raleigh-Durham (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+ORF = Norfolk VA (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+RIC = Richmond VA (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+MSY = New Orleans (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+BNA = Nashville (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+MEM = Memphis (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+BHM = Birmingham AL (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+
+USA — MIDWEST:
+ORD = Chicago O'Hare (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+MDW = Chicago Midway (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+DTW = Detroit (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+MSP = Minneapolis (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+STL = St. Louis (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+MKE = Milwaukee (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+CLE = Cleveland (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+CMH = Columbus OH (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+CVG = Cincinnati (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+IND = Indianapolis (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+DSM = Des Moines (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+OMA = Omaha (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+MCI = Kansas City (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+
+USA — SOUTH/TEXAS:
+ATL = Atlanta (EST UTC-5 / EDT UTC-4) — goingUsa=yes
+DFW = Dallas Fort Worth (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+IAH = Houston Intercontinental (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+HOU = Houston Hobby (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+DAL = Dallas Love Field (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+AUS = Austin (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+SAT = San Antonio (CST UTC-6 / CDT UTC-5) — goingUsa=yes
+
+USA — MOUNTAIN/WEST:
+DEN = Denver (MST UTC-7 / MDT UTC-6) — goingUsa=yes
+SLC = Salt Lake City (MST UTC-7 / MDT UTC-6) — goingUsa=yes
+PHX = Phoenix (MST UTC-7, no DST) — goingUsa=yes
+TUS = Tucson (MST UTC-7, no DST) — goingUsa=yes
+ABQ = Albuquerque (MST UTC-7 / MDT UTC-6) — goingUsa=yes
+LAS = Las Vegas (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+RNO = Reno (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+
+USA — PACIFIC COAST:
+LAX = Los Angeles (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+SFO = San Francisco (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+SJC = San Jose CA (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+OAK = Oakland (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+SAN = San Diego (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+SEA = Seattle (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+PDX = Portland Oregon (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+BOI = Boise (MST UTC-7 / MDT UTC-6) — goingUsa=yes
+SBA = Santa Barbara (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+SMF = Sacramento (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+BUR = Burbank (PST UTC-8 / PDT UTC-7) — goingUsa=yes
+
+USA — ALASKA/HAWAII:
+ANC = Anchorage Alaska (AKST UTC-9 / AKDT UTC-8) — goingUsa=yes
+FAI = Fairbanks Alaska (AKST UTC-9 / AKDT UTC-8) — goingUsa=yes
+HNL = Honolulu Hawaii (HST UTC-10, no DST) — goingUsa=yes
+OGG = Maui Hawaii (HST UTC-10) — goingUsa=yes
+KOA = Kona Hawaii (HST UTC-10) — goingUsa=yes
+LIH = Kauai Hawaii (HST UTC-10) — goingUsa=yes
+
+USA — OTHER:
+MSO = Missoula MT — goingUsa=yes
+GEG = Spokane — goingUsa=yes
+GRR = Grand Rapids — goingUsa=yes
+LNK = Lincoln NE — goingUsa=yes
+CHS = Charleston SC — goingUsa=yes
+GSP = Greenville SC — goingUsa=yes
+GSO = Greensboro NC — goingUsa=yes
+ROC = Rochester NY — goingUsa=yes
+BUF = Buffalo NY — goingUsa=yes
+ELP = El Paso — goingUsa=yes
+TYS = Knoxville — goingUsa=yes
+OKC = Oklahoma City — goingUsa=yes
+TUL = Tulsa — goingUsa=yes
+XNA = Fayetteville AR — goingUsa=yes
+LIT = Little Rock — goingUsa=yes
+GPT = Gulfport MS — goingUsa=yes
+PNS = Pensacola FL — goingUsa=yes
+VPS = Destin/Fort Walton FL — goingUsa=yes
+GUM = Guam (ChST UTC+10) — goingUsa=yes
+
+MEXICO:
+CUN = Cancun (EST UTC-5 no DST)
+MEX = Mexico City (CST UTC-6 / CDT UTC-5)
+GDL = Guadalajara (CST UTC-6 / CDT UTC-5)
+MTY = Monterrey (CST UTC-6 / CDT UTC-5)
+PVR = Puerto Vallarta (CST UTC-6)
+SJD = Los Cabos (MST UTC-7 no DST)
+ZIH = Ixtapa/Zihuatanejo
+HMO = Hermosillo
+MID = Merida
+OAX = Oaxaca
+
+CARIBBEAN:
+NAS = Nassau Bahamas
+GGT = Georgetown Exuma
+MBJ = Montego Bay Jamaica
+KIN = Kingston Jamaica
+POS = Port of Spain Trinidad
+GND = Grenada
+BGI = Bridgetown Barbados
+ANU = Antigua
+SXM = Sint Maarten
+PTP = Pointe-à-Pitre Guadeloupe
+FDF = Fort-de-France Martinique
+SJU = San Juan Puerto Rico (AST UTC-4 no DST)
+STT = St. Thomas USVI — goingUsa=yes
+STX = St. Croix USVI — goingUsa=yes
+HAV = Havana Cuba
+VRA = Varadero Cuba
+SCU = Santiago Cuba
+HOG = Holguin Cuba
+
+CENTRAL/SOUTH AMERICA:
+BOG = Bogota Colombia (COT UTC-5)
+MDE = Medellin Colombia
+GRU = São Paulo Brazil (BRT UTC-3)
+GIG = Rio de Janeiro (BRT UTC-3)
+EZE = Buenos Aires (ART UTC-3)
+SCL = Santiago Chile (CLT UTC-3 / CLST UTC-4)
+LIM = Lima Peru (PET UTC-5)
+UIO = Quito Ecuador (ECT UTC-5)
+PTY = Panama City (EST UTC-5)
+SJO = San Jose Costa Rica (CST UTC-6)
+GUA = Guatemala City (CST UTC-6)
+
+UNITED KINGDOM & IRELAND:
+LHR = London Heathrow (GMT UTC+0 / BST UTC+1)
+LGW = London Gatwick (GMT UTC+0 / BST UTC+1)
+STN = London Stansted (GMT UTC+0 / BST UTC+1)
+LTN = London Luton (GMT UTC+0 / BST UTC+1)
+LCY = London City (GMT UTC+0 / BST UTC+1)
+MAN = Manchester (GMT UTC+0 / BST UTC+1)
+BHX = Birmingham UK (GMT UTC+0 / BST UTC+1)
+EDI = Edinburgh (GMT UTC+0 / BST UTC+1)
+GLA = Glasgow (GMT UTC+0 / BST UTC+1)
+BRS = Bristol (GMT UTC+0 / BST UTC+1)
+NCL = Newcastle (GMT UTC+0 / BST UTC+1)
+DUB = Dublin (GMT UTC+0 / IST UTC+1)
+SNN = Shannon Ireland (GMT UTC+0 / IST UTC+1)
+BFS = Belfast (GMT UTC+0 / BST UTC+1)
+
+WESTERN EUROPE:
+CDG = Paris Charles de Gaulle (CET UTC+1 / CEST UTC+2)
+ORY = Paris Orly (CET UTC+1 / CEST UTC+2)
+FRA = Frankfurt (CET UTC+1 / CEST UTC+2)
+MUC = Munich (CET UTC+1 / CEST UTC+2)
+DUS = Düsseldorf (CET UTC+1 / CEST UTC+2)
+HAM = Hamburg (CET UTC+1 / CEST UTC+2)
+BER = Berlin Brandenburg (CET UTC+1 / CEST UTC+2)
+STR = Stuttgart (CET UTC+1 / CEST UTC+2)
+AMS = Amsterdam (CET UTC+1 / CEST UTC+2)
+BRU = Brussels (CET UTC+1 / CEST UTC+2)
+ZRH = Zurich (CET UTC+1 / CEST UTC+2)
+GVA = Geneva (CET UTC+1 / CEST UTC+2)
+VIE = Vienna (CET UTC+1 / CEST UTC+2)
+MAD = Madrid (CET UTC+1 / CEST UTC+2)
+BCN = Barcelona (CET UTC+1 / CEST UTC+2)
+LIS = Lisbon (WET UTC+0 / WEST UTC+1)
+OPO = Porto (WET UTC+0 / WEST UTC+1)
+FCO = Rome Fiumicino (CET UTC+1 / CEST UTC+2)
+MXP = Milan Malpensa (CET UTC+1 / CEST UTC+2)
+BGY = Milan Bergamo (CET UTC+1 / CEST UTC+2)
+VCE = Venice (CET UTC+1 / CEST UTC+2)
+NAP = Naples (CET UTC+1 / CEST UTC+2)
+ATH = Athens (EET UTC+2 / EEST UTC+3)
+HER = Heraklion Crete (EET UTC+2 / EEST UTC+3)
+SKG = Thessaloniki (EET UTC+2 / EEST UTC+3)
+CPH = Copenhagen (CET UTC+1 / CEST UTC+2)
+ARN = Stockholm Arlanda (CET UTC+1 / CEST UTC+2)
+OSL = Oslo (CET UTC+1 / CEST UTC+2)
+HEL = Helsinki (EET UTC+2 / EEST UTC+3)
+KEF = Reykjavik Iceland (GMT UTC+0 no DST)
+PRG = Prague (CET UTC+1 / CEST UTC+2)
+WAW = Warsaw (CET UTC+1 / CEST UTC+2)
+BUD = Budapest (CET UTC+1 / CEST UTC+2)
+OTP = Bucharest (EET UTC+2 / EEST UTC+3)
+SOF = Sofia (EET UTC+2 / EEST UTC+3)
+ZAG = Zagreb (CET UTC+1 / CEST UTC+2)
+DBV = Dubrovnik (CET UTC+1 / CEST UTC+2)
+SPU = Split Croatia (CET UTC+1 / CEST UTC+2)
+LJU = Ljubljana (CET UTC+1 / CEST UTC+2)
+BEG = Belgrade (CET UTC+1 / CEST UTC+2)
+
+CANARY ISLANDS / NORTH AFRICA:
+ACE = Lanzarote (WET UTC+0 / WEST UTC+1)
+TFS = Tenerife South (WET UTC+0 / WEST UTC+1)
+TFN = Tenerife North (WET UTC+0 / WEST UTC+1)
+LPA = Gran Canaria (WET UTC+0 / WEST UTC+1)
+PMI = Palma de Mallorca (CET UTC+1 / CEST UTC+2)
+IBZ = Ibiza (CET UTC+1 / CEST UTC+2)
+CMN = Casablanca Morocco (WET UTC+0 / WEST UTC+1)
+RAK = Marrakech (WET UTC+0)
+TUN = Tunis (CET UTC+1)
+ALG = Algiers (CET UTC+1)
+CAI = Cairo (EET UTC+2)
+
+MIDDLE EAST:
+DXB = Dubai (GST UTC+4)
+AUH = Abu Dhabi (GST UTC+4)
+SHJ = Sharjah (GST UTC+4)
+DOH = Doha Qatar (AST UTC+3)
+KWI = Kuwait (AST UTC+3)
+BAH = Bahrain (AST UTC+3)
+RUH = Riyadh (AST UTC+3)
+JED = Jeddah (AST UTC+3)
+MCT = Muscat Oman (GST UTC+4)
+AMM = Amman Jordan (EET UTC+2 / EEST UTC+3)
+BEY = Beirut (EET UTC+2 / EEST UTC+3)
+TLV = Tel Aviv (IST UTC+2 / IDT UTC+3)
+BGW = Baghdad (AST UTC+3)
+IKA = Tehran (IRST UTC+3:30 / IRDT UTC+4:30)
+
+AFRICA:
+NBO = Nairobi Kenya (EAT UTC+3)
+ADD = Addis Ababa Ethiopia (EAT UTC+3)
+JNB = Johannesburg (SAST UTC+2)
+CPT = Cape Town (SAST UTC+2)
+DUR = Durban (SAST UTC+2)
+ACC = Accra Ghana (GMT UTC+0)
+LOS = Lagos Nigeria (WAT UTC+1)
+ABJ = Abidjan (GMT UTC+0)
+DAK = Dakar Senegal (GMT UTC+0)
+CMN = Casablanca (UTC+0/+1)
+
+SOUTH ASIA:
+DEL = Delhi (IST UTC+5:30)
+BOM = Mumbai (IST UTC+5:30)
+MAA = Chennai (IST UTC+5:30)
+BLR = Bangalore (IST UTC+5:30)
+HYD = Hyderabad (IST UTC+5:30)
+CCU = Kolkata (IST UTC+5:30)
+COK = Kochi (IST UTC+5:30)
+CMB = Colombo Sri Lanka (IST UTC+5:30)
+DAC = Dhaka Bangladesh (BST UTC+6)
+KTM = Kathmandu (NPT UTC+5:45)
+KHI = Karachi Pakistan (PKT UTC+5)
+LHE = Lahore Pakistan (PKT UTC+5)
+ISB = Islamabad (PKT UTC+5)
+
+SOUTHEAST ASIA:
+BKK = Bangkok (ICT UTC+7)
+DMK = Bangkok Don Mueang (ICT UTC+7)
+HKT = Phuket (ICT UTC+7)
+CNX = Chiang Mai (ICT UTC+7)
+SGN = Ho Chi Minh City (ICT UTC+7)
+HAN = Hanoi (ICT UTC+7)
+PNH = Phnom Penh (ICT UTC+7)
+VTE = Vientiane (ICT UTC+7)
+RGN = Yangon Myanmar (MMT UTC+6:30)
+KUL = Kuala Lumpur (MYT UTC+8)
+SIN = Singapore (SGT UTC+8)
+DPS = Bali Denpasar (WITA UTC+8)
+CGK = Jakarta (WIB UTC+7)
+MNL = Manila (PHT UTC+8)
+CEB = Cebu (PHT UTC+8)
+
+EAST ASIA:
+HKG = Hong Kong (HKT UTC+8)
+PEK = Beijing Capital (CST UTC+8)
+PKX = Beijing Daxing (CST UTC+8)
+PVG = Shanghai Pudong (CST UTC+8)
+SHA = Shanghai Hongqiao (CST UTC+8)
+CAN = Guangzhou (CST UTC+8)
+SZX = Shenzhen (CST UTC+8)
+CTU = Chengdu (CST UTC+8)
+XIY = Xi'an (CST UTC+8)
+NKG = Nanjing (CST UTC+8)
+HGH = Hangzhou (CST UTC+8)
+WUH = Wuhan (CST UTC+8)
+CKG = Chongqing (CST UTC+8)
+KMG = Kunming (CST UTC+8)
+TSN = Tianjin (CST UTC+8)
+XMN = Xiamen (CST UTC+8)
+TYO = Tokyo (general, use NRT or HND)
+NRT = Tokyo Narita (JST UTC+9)
+HND = Tokyo Haneda (JST UTC+9)
+OSA = Osaka (general, use KIX or ITM)
+KIX = Osaka Kansai (JST UTC+9)
+ITM = Osaka Itami (JST UTC+9)
+NGO = Nagoya (JST UTC+9)
+SPK = Sapporo (general, use CTS)
+CTS = Sapporo New Chitose (JST UTC+9)
+FUK = Fukuoka (JST UTC+9)
+OKA = Okinawa (JST UTC+9)
+GMP = Seoul Gimpo (KST UTC+9)
+ICN = Seoul Incheon (KST UTC+9)
+PUS = Busan (KST UTC+9)
+TPE = Taipei Taiwan (CST UTC+8)
+KHH = Kaohsiung Taiwan (CST UTC+8)
+MFM = Macau (CST UTC+8)
+
+AUSTRALIA & PACIFIC:
+SYD = Sydney (AEST UTC+10 / AEDT UTC+11)
+MEL = Melbourne (AEST UTC+10 / AEDT UTC+11)
+BNE = Brisbane (AEST UTC+10, no DST)
+PER = Perth (AWST UTC+8, no DST)
+ADL = Adelaide (ACST UTC+9:30 / ACDT UTC+10:30)
+CNS = Cairns (AEST UTC+10, no DST)
+OOL = Gold Coast (AEST UTC+10, no DST)
+AKL = Auckland New Zealand (NZST UTC+12 / NZDT UTC+13)
+CHC = Christchurch (NZST UTC+12 / NZDT UTC+13)
+WLG = Wellington (NZST UTC+12 / NZDT UTC+13)
+NAN = Nadi Fiji (FJT UTC+12)
+PPT = Papeete Tahiti (TAHT UTC-10)
+HNL = Honolulu — goingUsa=yes (listed above)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5 — GOING USA RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Set goingUsa = "yes" if ANY airport in the pairing route is marked
+"goingUsa=yes" in the table above (any US airport including territories
+like Puerto Rico USVI Guam). Otherwise goingUsa = "no".
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6 — TIMEZONE ESTIMATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Calculate timezone as the difference (in hours) between the crew
+member's home base UTC offset and the MAIN destination UTC offset.
+Positive = destination is ahead of home. Negative = destination behind.
+Use 0 if you cannot determine the offset.
+
+Example: Home base YYZ (UTC-5), destination LHR (UTC+0) → timezone = +5
+Example: Home base YYZ (UTC-5), destination LAX (UTC-8) → timezone = -3
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AIRLINE SCHEDULING SYSTEMS (for format recognition only)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NETLINE/CREW: Air Canada, Swiss, Lufthansa, Brussels, SAS, TAP — horizontal monthly grid, colored blocks, dates 1–31 across top row, "PA####" pairing numbers.
+WESTJET: "RD" for days off, route shown as "YYC-LAS-YYC" with dashes, WestJet/Swoop branding.
+PORTER: PD prefix on pairings, YTZ and/or YYZ as base, E195-E2 jet, Florida/NE US routes.
+DELTA: ATL/DTW hubs, DL flight numbers, blue color scheme, numeric pairing IDs.
+UNITED: ORD/IAH/EWR hubs, UA flight numbers, FLICA-style layout.
+AMERICAN: DFW/CLT/MIA hubs, AA flight numbers, Sabre-based view.
+SOUTHWEST: No hub, point-to-point, WN flight numbers.
+BA/IBERIA: LHR/LGW base, "DB"=day at base, "HSB"=home standby.
+AIR FRANCE/KLM: CDG/AMS base, French labels, "CO"=day off, "ATTE"=standby.
+EMIRATES/ETIHAD/QATAR: DXB/AUH/DOH base, AIMS layout, hotel city in block.
+RYANAIR/EASYJET: European short-haul, "HOT"=hot standby, very compact grid.
+LUFTHANSA GROUP (LH/LX/OS/SN): FRA/MUC/ZRH/VIE/BRU, "FR"=free day, "UU"=standby.
+
+UNIVERSAL NON-PAIRING CODES (ignore, do not extract):
+DO OFF RD D/O FR(LH) CO(AF) = Day off
+SBY STB STBY HSB HSBY HOT ATTE RSV RES = Standby/Reserve
+AL VAC HOL LV CONGE = Leave
+TRG TRN SIM GRD GTC OE = Training
 `;
 
 // Parse roster image(s) with Haiku vision
