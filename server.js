@@ -565,6 +565,50 @@ ${blocks}
 COMBINED COMPLIANCE: Where rules conflict, apply the MOST RESTRICTIVE. If one diet allows dairy but another forbids it, exclude dairy entirely. Every single meal must satisfy every selected diet.` + FOOTER;
 }
 
+function getCognitivePerfRules(data) {
+  const reportTime = (data.report_time || "").trim();
+  const dutyHours = parseInt(data.duty_hours, 10) || 0;
+  const layoverType = (data.layover_type || "").trim();
+  const flightDir = (data.flight_direction || "").trim();
+
+  if (!reportTime && !dutyHours && !layoverType && !flightDir) return null;
+
+  const rules = [];
+
+  if (reportTime) {
+    const [rHour = 8] = reportTime.split(":").map(Number);
+    if (rHour >= 3 && rHour < 6) {
+      rules.push(`EARLY WAKE REPORT (${reportTime} — Window of Circadian Low): Highest fatigue risk. Pre-duty meal must be HIGH-PROTEIN (eggs, Greek yogurt, lean meat) — protein supports alertness. Avoid heavy carbs before duty. First in-flight snack within 90 minutes of report: complex carbs + protein (oat bar, nut butter). Strategic caffeine: one serving at report time, then taper after hour 4 of duty.`);
+    } else if (rHour >= 22 || rHour < 3) {
+      rules.push(`NIGHT SHIFT REPORT (${reportTime}): Duty crosses the WOCL (02:00–06:00). Pre-duty meal must be LIGHT — avoid large meals, as GI function slows at night. Plan portable snacks every 2–3 hours during duty. Avoid heavy high-fat meals between 02:00–06:00 as they worsen fatigue.`);
+    } else if (rHour >= 14 && rHour < 17) {
+      rules.push(`POST-LUNCH DIP REPORT (${reportTime}): Circadian post-lunch dip window. Avoid heavy carbohydrate lunch before duty — risk of drowsiness. Prefer a light protein-rich pre-duty meal. Keep a caffeine option available for hour 1 of duty.`);
+    }
+  }
+
+  if (dutyHours >= 12) {
+    rules.push(`EXTENDED DUTY (${dutyHours}h): Plan MUST include portable, calorie-dense snacks for hours 6–${dutyHours}. Budget ~150–200 kcal per 2-hour block in the extended window. Avoid high-fat/high-carb meal combinations that cause drowsiness. Include hydration cues in every snack.`);
+  } else if (dutyHours >= 8) {
+    rules.push(`STANDARD-LONG DUTY (${dutyHours}h): Include at least 2 substantial, portable snacks spaced ~3 hours apart across the duty window.`);
+  }
+
+  if (layoverType === "short") {
+    rules.push(`SHORT LAYOVER (≤8h — sleep opportunity): Nutrition must prioritize RECOVERY SLEEP. Pre-sleep: light tryptophan-rich meal (turkey, banana, warm milk). Avoid alcohol, caffeine, and heavy meals within 3h of sleep. On wake: rapid high-protein snack before next duty block.`);
+  } else if (layoverType === "long") {
+    rules.push(`LONG LAYOVER (24h+): Full recovery window. Day 1 layover: hydrate aggressively, eat anti-inflammatory foods (berries, omega-3 fish, leafy greens). Day 2: align meal timing with destination time zone. Prioritize recovery sleep nutrition (tryptophan, magnesium-rich foods).`);
+  }
+
+  if (flightDir === "east") {
+    rules.push(`EASTWARD FLIGHT (advance circadian): Circadian advance is harder. At destination: eat melatonin-supporting foods in the evening (tart cherries, kiwi, walnuts). Avoid late-night eating — it delays the advance. Get bright-light exposure in the morning at destination.`);
+  } else if (flightDir === "west") {
+    rules.push(`WESTWARD FLIGHT (delay circadian): Body adjusts more easily westward. Allow slightly later meal timing at destination. Bright light exposure in the evening at destination accelerates adjustment.`);
+  }
+
+  return rules.length > 0
+    ? `COGNITIVE PERFORMANCE PROTOCOL — DUTY-OPTIMIZED NUTRITION:\n${rules.join("\n\n")}`
+    : null;
+}
+
 // Builds the shared crew-profile context used by every prompt for a plan.
 function buildContext(data, lang, pairingDays) {
   const langName = lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English";
@@ -631,7 +675,9 @@ function buildContext(data, lang, pairingDays) {
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance };
+  const cognitivePerfRules = getCognitivePerfRules(data);
+
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules };
 }
 
 function buildAllDaysPrompt(data, pairingDays, ctx) {
@@ -702,7 +748,8 @@ MAINTENANCE CALORIE GOAL (HARD REQUIREMENT — this is NOT a diet plan):
     Snack 2:   ~${Math.round(ctx.maintenanceTarget * 0.08)} kcal
     Total:     ~${ctx.maintenanceTarget} kcal
 - Use full-sized portions. Add calorie-dense ingredients where needed: olive oil, avocado, nuts, cheese, whole grains, legumes, nut butter, Greek yogurt.
-- VERIFY: sum all 5 meal "calories" values. If total < ${ctx.maintenanceTarget - 100} kcal, increase portion sizes before finalizing.` : ""}`;
+- VERIFY: sum all 5 meal "calories" values. If total < ${ctx.maintenanceTarget - 100} kcal, increase portion sizes before finalizing.` : ""}
+${ctx.cognitivePerfRules ? `\n${ctx.cognitivePerfRules}` : ""}`;
 }
 
 function getDestinationFoodRules(destinations) {
@@ -1177,6 +1224,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       days,
       groceryList: extras.groceryList,
       foodRestrictions: extras.foodRestrictions,
+      performanceAdvisory: getCognitivePerfRules(data),
       pairingCount: usage.pairingCount + 1,
       isPremium: usage.isPremium,
     };
