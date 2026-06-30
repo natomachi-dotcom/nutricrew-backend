@@ -1129,6 +1129,125 @@ const ROSTER_SCHEMA = {
   additionalProperties: false,
 };
 
+// ─── ROSTER FORMAT KNOWLEDGE BASE ────────────────────────────────
+// Descriptions of common airline scheduling systems and formats so the
+// vision model can recognise which format it's looking at and extract
+// pairings more accurately from each one.
+const ROSTER_FORMAT_GUIDE = `
+ROSTER FORMAT KNOWLEDGE BASE — use this to identify the airline/system before extracting pairings.
+
+=== SCHEDULING SYSTEMS ===
+
+NETLINE/CREW (Lufthansa Systems)
+Airlines: Air Canada, Swiss, Brussels, Lufthansa, Eurowings, SAS, TAP, many others.
+Layout: Monthly grid. Dates (1–31) run across the top row. Crew name/employee ID at top. Each column is one day.
+Key codes: SBY/STB=Standby OFF/DO=Day-off AL/VAC=Leave TRG=Training PA####=Pairing number
+Pairing blocks: span multiple columns (days), show IATA codes and times inside the block.
+Look for: row of numbers 1–31 at top, color blocks spanning several days, 2–4 letter IATA codes inside blocks.
+
+MAESTRO (Air Canada / Air Canada Rouge / Jazz)
+Airlines: AC, RV, QK.
+Layout: Monthly PDF or screen. "PA" prefix on pairing numbers (e.g. PA 4521). Layover cities listed inside pairing block.
+Codes: DO=Day-off, SBY/HSBY=Standby, TRG/GRD=Training, PAX=Positioning.
+Canadian hubs: YYZ, YUL, YVR, YYC, YEG, YHZ, YOW.
+Look for: "PA" prefix, Canadian IATA codes, Air Canada logo or "AC" flight numbers.
+
+WESTJET (WestJet Airlines / Swoop)
+Airlines: WS, WO.
+Layout: Grid or list. Pairings numbered without prefix or with "WS". Full route shown (e.g. YYC-LAS-YYC).
+Codes: RD=Regular Day Off, DO=Day-off, SBY=Standby, TRG=Training.
+Hubs: YYC, YYZ, YEG, YVR, YHM.
+Look for: "RD" code for days off, route strings with dashes (YYC-LAS), WestJet or Swoop branding.
+
+PORTER AIRLINES
+Airlines: PD.
+Layout: Monthly calendar grid. Pairing numbers with PD prefix or numeric.
+Hub: YTZ (Billy Bishop Toronto), YOW, YUL.
+Look for: YTZ, small regional Canadian routes, Porter branding.
+
+DELTA AIR LINES CCS
+Airlines: DL, 9E (Endeavor), OO (SkyWest codeshare).
+Layout: Monthly calendar or list. Numeric pairing codes.
+Codes: DO=Day-off, RD=Reserve Day-off, R####=Reserve pairing, GTC/OE=Training.
+Hubs: ATL, DTW, MSP, SLC, BOS, LGA, JFK, SEA, LAX, CVG.
+Look for: ATL or DTW codes, Delta "DL" flight numbers, blue color scheme.
+
+UNITED AIRLINES (FLICA / Jeppesen Crew)
+Airlines: UA, OO (United Express).
+Layout: Monthly view, color-coded. Pairings with numeric ID.
+Codes: DO=Day-off, OFF=Day-off, RES/RSV=Reserve, TRN=Training.
+Hubs: ORD, IAH, EWR, DEN, IAD, LAX, SFO, GUM.
+Look for: United "UA" flight numbers, ORD/EWR/IAH hub codes.
+
+AMERICAN AIRLINES (Sabre-based)
+Airlines: AA, MQ (Envoy), YV (Mesa), OH (PSA).
+Layout: Monthly or line-based view.
+Codes: DO=Day-off, RD=Reserve Day-off, RES=Reserve.
+Hubs: DFW, CLT, PHL, MIA, ORD, LAX, JFK, PHX, DCA, BOS.
+Look for: DFW or MIA codes, "AA" flight numbers, American Airlines branding.
+
+SOUTHWEST AIRLINES
+Airlines: WN.
+Layout: Point-based, calendar view, often shows "trip" blocks.
+Codes: DO/OFF=Day-off, SBY=Standby.
+Bases: DAL, HOU, ATL, BNA, BWI, MDW, DEN, LAS, LAX, MCO, OAK, PHX, SAN.
+Look for: Point-to-point routes with no hub pattern, WN flight numbers.
+
+BRITISH AIRWAYS (eCrew / NetLine)
+Airlines: BA, Iberia (IB).
+Layout: Monthly grid, similar to NetLine.
+Codes: DO=Day-off, DB=Day at Base, SBY/HSB=Standby, TRG/SIM=Training.
+Hubs: LHR, LGW, MAN.
+Look for: LHR/LGW codes, "BA" flight numbers, British Airways branding.
+
+AIR FRANCE / KLM (Rave Crew Management)
+Airlines: AF, KL, TO (Transavia).
+Layout: Monthly calendar. French labels possible.
+Codes: CO/CONGE=Off, RP=Rest Period, ATTE/ATTD=Standby.
+Hubs: CDG, ORY (AF); AMS (KL).
+Look for: CDG/AMS codes, "AF" or "KL" flight numbers, French language labels.
+
+EMIRATES / ETIHAD / QATAR (AIMS-based)
+Airlines: EK, EY, QR.
+Layout: Monthly table. Pairing codes, hotel city shown for layovers.
+Codes: OFF=Day-off, SBY/STBY=Standby.
+Hubs: DXB (EK), AUH (EY), DOH (QR).
+Look for: DXB/AUH/DOH codes, Middle Eastern airline logos or flight numbers.
+
+RYANAIR / EASYJET (Jeppesen Crew)
+Airlines: FR, U2.
+Layout: Monthly calendar, very compact.
+Codes: OFF/D-O=Day-off, SBY/HOT=Standby.
+Bases: STN, LTN, BGY, ACE, and many European bases.
+Look for: European short-haul IATA codes, "FR" or "U2" flight numbers, European carrier branding.
+
+LUFTHANSA GROUP (NetLine/Crew)
+Airlines: LH, LX (Swiss), OS (Austrian), SN (Brussels).
+Layout: NetLine/Crew monthly grid.
+Codes: FR=Free day, UU=Standby, SU=Sim, SD=Ground duty.
+Hubs: FRA, MUC (LH); ZRH (LX); VIE (OS); BRU (SN).
+Look for: FRA/MUC/ZRH/VIE codes, German/European flight numbers.
+
+=== UNIVERSAL CODES — NEVER extract these as a pairing ===
+DO, OFF, RD, D/O, FR (Lufthansa), CO (Air France) = Day off
+SBY, STB, STBY, HSB, HSBY, HOT, ATTE, ATTD, RSV, RES = Standby / Reserve
+AL, VAC, HOL, CONGE = Annual leave / Vacation
+TRG, TRN, SIM, GRD, GTC, OE = Training / Simulator
+
+=== HOW TO IDENTIFY PAIRING START AND END DATES ===
+- A pairing block spans from its first day to its last day on the calendar grid
+- pairingDays = number of days the block covers (minimum 1)
+- Departure date = first day of the block in YYYY-MM-DD
+- Return date = last day of the block in YYYY-MM-DD (same as departure if 1-day trip)
+- The crew member's homeBase (provided below) is the departure city for day 1 of each pairing
+
+=== DESTINATION EXTRACTION ===
+- Look for 3-letter IATA codes inside pairing blocks (e.g. YYZ, LHR, DXB, ATL)
+- A sequence YYZ→LHR→DXB means layovers at LHR then DXB
+- Convert IATA codes to city names for the output (e.g. YYZ→Toronto, LHR→London, DXB→Dubai, CDG→Paris, ATL→Atlanta, ORD→Chicago)
+- goingUsa = "yes" if ANY destination IATA is a US airport (e.g. JFK, LAX, ORD, ATL, DFW, MIA, SFO, SEA, BOS, EWR, IAH, DEN, LAS, MCO, PHX, SAN, DTW, MSP, IAD, DCA, CLT, PHL, HOU, DAL, MDW, etc.)
+`;
+
 // Parse roster image(s) with Haiku vision
 app.post("/api/roster/parse", apiLimiter, async (req, res) => {
   try {
@@ -1155,18 +1274,25 @@ app.post("/api/roster/parse", apiLimiter, async (req, res) => {
     }));
 
     const today = new Date().toISOString().slice(0, 10);
-    const prompt = `You are analyzing a cabin crew roster/schedule. Today's date is ${today}. The crew member's home base is: ${homeBase || "unknown"}.
+    const prompt = `You are an expert at reading airline crew rosters and schedules. Today's date is ${today}. The crew member's home base is: ${homeBase || "unknown"}.
 
-Extract ALL future pairings (trips) from this roster. For each pairing:
+${ROSTER_FORMAT_GUIDE}
+
+=== YOUR TASK ===
+1. First identify which airline/scheduling system this roster belongs to using the knowledge base above.
+2. Extract ALL future flight pairings (trips away from home base) visible in the roster.
+3. SKIP days off, standby, training, vacation, and reserve entries — extract only actual flight pairings.
+
+For each pairing, extract:
 - pairingDate: departure date in YYYY-MM-DD format
-- returnDate: return date in YYYY-MM-DD format
-- pairingDays: number of days away (minimum 1)
-- departure: home base city name (e.g. "Miami", "London", "Paris")
+- returnDate: return date in YYYY-MM-DD format (same as pairingDate if 1-day trip)
+- pairingDays: total days away including departure and return day (minimum 1)
+- departure: home base city name (e.g. "Toronto", "London", "Paris")
 - destinations: array of layover/destination city names in order (e.g. ["New York", "London"])
-- goingUsa: "yes" if ANY destination is in the USA, otherwise "no"
+- goingUsa: "yes" if ANY destination is a US airport/city, otherwise "no"
 - timezone: estimated hours difference from home base to main destination (negative if behind, positive if ahead, 0 if unsure)
 
-Only include pairings with dates on or after today (${today}). Ignore past dates.
+Only include pairings with dates on or after today (${today}). Ignore past pairings.
 Return ONLY valid JSON with a "pairings" array. If you cannot read the roster clearly, return {"pairings":[]}.`;
 
     const message = await client.messages.create({
