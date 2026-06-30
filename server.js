@@ -703,86 +703,118 @@ function getDestinationFoodRules(destinations) {
 
   const hasAny = (codes) => codes.some(c => dest.includes(c));
 
-  // UK
-  if (hasAny(["LHR", "LGW", "MAN", "STN", "EDI", "GLA", "BHX", "BRS"])) {
+  const DISCLAIMER = "\n⚠️ Rules can change — always verify with the destination country's official customs/border authority or IATA travel advisories before your pairing.";
+
+  // UK — all major airports including secondary London airports
+  if (hasAny(["LHR", "LGW", "LTN", "LCY", "STN", "MAN", "EDI", "GLA", "BHX", "BRS", "NCL", "LBA", "ABZ", "BFS", "BHD", "SOU", "EXT", "CWL"])) {
     rules.push(`UNITED KINGDOM CUSTOMS (HMRC/DEFRA):
 - NO meat or dairy products from outside the UK (post-Brexit rules; EU products now restricted like non-EU).
 - Fresh fruit and vegetables from non-EU countries may require phytosanitary certificates.
 - Commercially sealed, fully cooked, or shelf-stable products are generally permitted.
-- Alcohol limits: 1L spirits or 2L wine/beer duty-free per adult.
-- Declare any food exceeding personal allowance — fines up to £5,000 for violations.`);
+- Alcohol duty-free limit: 1L spirits or 2L wine/beer per adult.
+- Declare any food exceeding personal allowance — fines up to £5,000 for violations.${DISCLAIMER}`);
   }
 
-  // EU / Schengen (France, Germany, Netherlands, Spain, Italy, etc.)
-  if (hasAny(["CDG", "ORY", "FRA", "AMS", "MAD", "BCN", "FCO", "MXP", "BRU", "VIE", "ZRH", "LIS", "ARN", "CPH", "HEL", "OSL", "WAW", "PRG", "BUD", "ATH", "DUB"])) {
+  // EU / Schengen — France, Germany, Benelux, Netherlands, Spain, Italy, Portugal, Austria, Switzerland, Scandinavia, Eastern Europe, Ireland, Greece
+  if (hasAny([
+    // France
+    "CDG", "ORY", "NCE", "LYS", "MRS", "TLS", "NTE", "BOD", "SXB", "MPL", "LIL",
+    // Germany
+    "FRA", "MUC", "BER", "HAM", "DUS", "CGN", "STR", "NUE", "HAJ", "DTM", "LEJ",
+    // Netherlands / Belgium / Luxembourg
+    "AMS", "EIN", "BRU", "CRL", "LUX",
+    // Spain / Portugal
+    "MAD", "BCN", "PMI", "AGP", "ALC", "VLC", "SVQ", "LIS", "OPO", "FAO",
+    // Italy
+    "FCO", "MXP", "LIN", "NAP", "VCE", "BLQ", "CTA", "BGY", "PMO",
+    // Austria / Switzerland
+    "VIE", "SZG", "ZRH", "GVA", "BSL",
+    // Scandinavia
+    "ARN", "GOT", "MMX", "CPH", "AAL", "BLL", "HEL", "TMP", "OSL", "BGO", "TRD",
+    // Eastern Europe
+    "WAW", "KRK", "PRG", "BUD", "OTP", "SOF", "LJU", "ZAG", "RIX", "TLL", "VNO",
+    // Greece / Cyprus / Malta
+    "ATH", "SKG", "HER", "RHO", "MLA",
+    // Ireland
+    "DUB", "ORK", "SNN",
+  ])) {
     rules.push(`EU / SCHENGEN AREA CUSTOMS:
-- Travelers from outside the EU: NO meat or dairy products (strict EU animal health rules).
-- Fresh fruits and vegetables from non-EU countries prohibited without official phytosanitary certificate.
+- Travelers from outside the EU: NO meat or dairy products allowed (strict EU animal health rules).
+- Fresh fruits and vegetables from non-EU countries prohibited without an official phytosanitary certificate.
 - Commercially packaged and sealed food (shelf-stable, hermetically sealed) is generally permitted.
-- Duty-free limits: 1L spirits, 2L wine, 200 cigarettes per adult.
-- Declare all food at customs when arriving from non-EU countries — penalties apply for undeclared items.`);
+- Duty-free limits from non-EU: 1L spirits, 2L wine, 200 cigarettes per adult.
+- Declare all food at customs when arriving from non-EU countries — penalties apply for undeclared items.${DISCLAIMER}`);
   }
 
   // Japan
-  if (hasAny(["NRT", "HND", "KIX", "NGO", "CTS", "FUK", "OKA"])) {
+  if (hasAny(["NRT", "HND", "KIX", "NGO", "CTS", "FUK", "OKA", "OIT", "KMI", "KMJ", "SDJ"])) {
     rules.push(`JAPAN CUSTOMS (Ministry of Agriculture, Forestry and Fisheries):
 - Strict plant quarantine: fresh fruits and vegetables from most countries prohibited; must be inspected and certified.
 - Meat products from many countries restricted or banned (especially pork from countries with foot-and-mouth disease).
-- Commercially sealed processed foods (chips, cookies, sealed instant meals) generally permitted.
+- Commercially sealed processed foods (chips, cookies, sealed instant meals) are generally permitted.
 - No soil or plants with roots allowed.
 - Declare ALL food items on the customs form — Japan conducts thorough inspections; undeclared items may be confiscated.
-- Allowed: packaged snacks, sealed chocolates, vacuum-sealed processed meats with inspection certificate.`);
+- Allowed: packaged snacks, sealed chocolates, vacuum-sealed processed meats with valid inspection certificate.${DISCLAIMER}`);
   }
 
   // Australia
-  if (hasAny(["SYD", "MEL", "BNE", "PER", "ADL", "CBR", "OOL", "CNS", "DRW"])) {
-    rules.push(`AUSTRALIA CUSTOMS (DAFF — Department of Agriculture):
-- VERY strict biosecurity — one of the toughest in the world.
+  if (hasAny(["SYD", "MEL", "BNE", "PER", "ADL", "CBR", "OOL", "CNS", "DRW", "HBA", "TSV", "MKY", "ROK", "LST"])) {
+    rules.push(`AUSTRALIA CUSTOMS (DAFF — Department of Agriculture, Fisheries and Forestry):
+- VERY strict biosecurity — one of the strictest in the world.
 - ALL fresh or dried fruit, vegetables, meat, eggs, seeds, nuts, and plant material must be declared.
 - Many fresh and unprocessed items will be confiscated or treated at your expense.
 - Commercially sealed and heat-treated packaged goods (sealed chocolates, chips, biscuits) generally OK.
 - Failure to declare carries fines up to AUD $2,220 or criminal prosecution.
-- Always declare everything on the Incoming Passenger Card — inspectors use detector dogs.`);
+- Always declare everything on the Incoming Passenger Card — inspectors use detector dogs.${DISCLAIMER}`);
   }
 
-  // UAE / Gulf
-  if (hasAny(["DXB", "AUH", "SHJ", "DWC", "ADE", "MCT", "DOH", "BAH", "KWI", "RUH", "JED", "DMM"])) {
+  // UAE / Gulf States — UAE, Qatar, Oman, Kuwait, Bahrain, Saudi Arabia
+  if (hasAny([
+    // UAE
+    "DXB", "AUH", "SHJ", "DWC", "AAN", "RKT", "FJR",
+    // Qatar / Oman / Kuwait / Bahrain
+    "DOH", "MCT", "SLL", "KWI", "BAH",
+    // Saudi Arabia
+    "RUH", "JED", "DMM", "MED", "TUU", "AHB", "GIZ",
+  ])) {
     rules.push(`UAE / GULF STATES CUSTOMS:
-- Pork products and alcohol are heavily restricted or prohibited in most Gulf states (UAE, Qatar, Kuwait, Saudi Arabia, Bahrain).
-  - UAE: pork and pork-derived products may be purchased only in licensed shops; importing is restricted.
-  - Saudi Arabia: pork and alcohol strictly prohibited; confiscation and legal penalties apply.
-  - Qatar: pork restricted; alcohol only in licensed hotels and not for personal import.
-- All food must be Halal-certified for Muslim travelers or when in doubt.
-- Commercially sealed non-pork snacks and packaged foods are generally fine.
-- Medications: declare any controlled substances or large quantities of medicine.`);
+- Pork products and alcohol are restricted or prohibited in most Gulf states.
+  - UAE: pork available only in licensed shops; personal import is restricted.
+  - Saudi Arabia: pork and alcohol strictly prohibited — confiscation and legal penalties apply.
+  - Qatar: pork restricted; alcohol only in licensed hotels, not for personal import.
+  - Kuwait & Bahrain: alcohol and pork import prohibited.
+- All commercially imported food must be Halal-certified; carry packaging with Halal certification visible.
+- Commercially sealed non-pork snacks and packaged foods are generally permitted.
+- Medications: declare any controlled substances or large medicine quantities.${DISCLAIMER}`);
   }
 
   // Mexico
-  if (hasAny(["MEX", "CUN", "GDL", "MTY", "TLC", "SJD", "PVR", "MID", "OAX", "VER"])) {
-    rules.push(`MEXICO CUSTOMS (SAT / SAGARPA):
+  if (hasAny(["MEX", "CUN", "GDL", "MTY", "TLC", "SJD", "PVR", "MID", "OAX", "VER", "TAM", "ZIH", "MZT", "HMO", "CUU", "TIJ", "MXL", "LAP", "MLM", "BJX", "QRO"])) {
+    rules.push(`MEXICO CUSTOMS (SAT / SENASICA):
 - Duty-free personal allowance: USD $500 in goods per adult (air travel).
-- Fresh fruits, vegetables, and meat products from abroad may be restricted — SAGARPA inspects for pests.
-- Commercial packaged and sealed food products are generally permitted within reasonable quantities.
+- Fresh fruits, vegetables, and unprocessed meat products from abroad may be restricted — SENASICA inspects for agricultural pests.
+- Commercial packaged and sealed food products are generally permitted in reasonable personal quantities.
 - Declare amounts of cash exceeding USD $10,000 equivalent.
-- Bringing food for personal consumption (sealed, commercially packaged) is usually fine — avoid bulk quantities.`);
+- Food for personal consumption (sealed, commercially packaged) is usually fine — avoid bulk quantities.${DISCLAIMER}`);
   }
 
   // Canada
-  if (hasAny(["YYZ", "YUL", "YVR", "YYC", "YEG", "YOW", "YHZ", "YWG"])) {
+  if (hasAny(["YYZ", "YUL", "YVR", "YYC", "YEG", "YOW", "YHZ", "YWG", "YQB", "YXE", "YQR", "YYJ", "YXX", "YYT", "YFC", "YHM", "YKF", "YLW"])) {
     rules.push(`CANADA CUSTOMS (CBSA):
 - Most commercially packaged, sealed food products are permitted.
 - Fresh fruits and vegetables may be restricted depending on origin country (declare and let CBSA inspect).
 - Meat and dairy from the US generally OK; from other countries, restrictions apply.
-- Duty-free: 1.5L wine or 1.14L spirits or 8.5L beer per adult (19+).
-- Declare ALL food items — inspectors use detector dogs; undeclared items result in fines.`);
+- Duty-free: 1.5L wine or 1.14L spirits or 8.5L beer per adult (19+ in most provinces).
+- Declare ALL food items on the CBSA declaration card — inspectors use detector dogs; undeclared items result in fines.${DISCLAIMER}`);
   }
 
   if (rules.length === 0) {
-    rules.push(`DESTINATION CUSTOMS (general guidance):
+    rules.push(`DESTINATION CUSTOMS (general guidance — specific country rules not found in database):
 - Always declare food items at customs when crossing any international border.
-- Fresh fruits, vegetables, meat, dairy, and plants are commonly restricted — check the specific country's customs authority before traveling.
+- Fresh fruits, vegetables, meat, dairy, and plants are commonly restricted — check the specific country's customs authority or government website before traveling.
 - Commercially sealed and packaged shelf-stable foods are generally permitted in personal quantities.
-- When in doubt, consume perishables before landing or leave them behind.`);
+- When in doubt, consume perishables before landing or leave them behind.
+${DISCLAIMER}`);
   }
 
   return rules.join("\n\n");
