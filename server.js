@@ -594,6 +594,7 @@ function buildContext(data, lang, pairingDays) {
   const goals = data.goals || [];
   const hasGainWeight = goals.includes("gain_weight");
   const gainTarget = hasGainWeight ? estimateGainTarget(data) : null;
+  const maintenanceTarget = (!hasCalorieDeficit && !hasGainWeight) ? Math.round(estimateTDEE(data)) : null;
 
   const budgetAmount = parseFloat(data.budget_amount);
   const hasBudget = budgetAmount > 0;
@@ -630,7 +631,7 @@ function buildContext(data, lang, pairingDays) {
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance };
 }
 
 function buildAllDaysPrompt(data, pairingDays, ctx) {
@@ -688,7 +689,103 @@ WEIGHT GAIN GOAL: targeting a calorie surplus for weight/muscle gain.
 - Each day's meal "calories" SUM must be within ±75 kcal of ${ctx.gainTarget}.
 - Prioritize calorie-dense, protein-rich foods (lean meats, eggs, legumes, nuts, seeds, whole grains, healthy fats). Larger portions encouraged.
 - Include 2 snacks minimum per day (energy-dense: trail mix, nut butter, protein smoothie ingredients).
-- Avoid low-calorie-density "diet" foods.` : ""}`;
+- Avoid low-calorie-density "diet" foods.` : ""}
+${!ctx.calorieTarget && !ctx.gainTarget && ctx.maintenanceTarget ? `
+MAINTENANCE CALORIE GOAL: no deficit or surplus — fuel the crew member at their maintenance level.
+- Estimated daily maintenance: ${ctx.maintenanceTarget} kcal (Mifflin-St Jeor TDEE, activity ×1.55 for aviation crew)
+- Each day's meal "calories" SUM must be within ±150 kcal of ${ctx.maintenanceTarget}.
+- Use balanced, nutritious meals — do NOT arbitrarily reduce portions or calories below this target.` : ""}`;
+}
+
+function getDestinationFoodRules(destinations) {
+  const dest = (destinations || []).join(" ").toUpperCase();
+  const rules = [];
+
+  const hasAny = (codes) => codes.some(c => dest.includes(c));
+
+  // UK
+  if (hasAny(["LHR", "LGW", "MAN", "STN", "EDI", "GLA", "BHX", "BRS"])) {
+    rules.push(`UNITED KINGDOM CUSTOMS (HMRC/DEFRA):
+- NO meat or dairy products from outside the UK (post-Brexit rules; EU products now restricted like non-EU).
+- Fresh fruit and vegetables from non-EU countries may require phytosanitary certificates.
+- Commercially sealed, fully cooked, or shelf-stable products are generally permitted.
+- Alcohol limits: 1L spirits or 2L wine/beer duty-free per adult.
+- Declare any food exceeding personal allowance — fines up to £5,000 for violations.`);
+  }
+
+  // EU / Schengen (France, Germany, Netherlands, Spain, Italy, etc.)
+  if (hasAny(["CDG", "ORY", "FRA", "AMS", "MAD", "BCN", "FCO", "MXP", "BRU", "VIE", "ZRH", "LIS", "ARN", "CPH", "HEL", "OSL", "WAW", "PRG", "BUD", "ATH", "DUB"])) {
+    rules.push(`EU / SCHENGEN AREA CUSTOMS:
+- Travelers from outside the EU: NO meat or dairy products (strict EU animal health rules).
+- Fresh fruits and vegetables from non-EU countries prohibited without official phytosanitary certificate.
+- Commercially packaged and sealed food (shelf-stable, hermetically sealed) is generally permitted.
+- Duty-free limits: 1L spirits, 2L wine, 200 cigarettes per adult.
+- Declare all food at customs when arriving from non-EU countries — penalties apply for undeclared items.`);
+  }
+
+  // Japan
+  if (hasAny(["NRT", "HND", "KIX", "NGO", "CTS", "FUK", "OKA"])) {
+    rules.push(`JAPAN CUSTOMS (Ministry of Agriculture, Forestry and Fisheries):
+- Strict plant quarantine: fresh fruits and vegetables from most countries prohibited; must be inspected and certified.
+- Meat products from many countries restricted or banned (especially pork from countries with foot-and-mouth disease).
+- Commercially sealed processed foods (chips, cookies, sealed instant meals) generally permitted.
+- No soil or plants with roots allowed.
+- Declare ALL food items on the customs form — Japan conducts thorough inspections; undeclared items may be confiscated.
+- Allowed: packaged snacks, sealed chocolates, vacuum-sealed processed meats with inspection certificate.`);
+  }
+
+  // Australia
+  if (hasAny(["SYD", "MEL", "BNE", "PER", "ADL", "CBR", "OOL", "CNS", "DRW"])) {
+    rules.push(`AUSTRALIA CUSTOMS (DAFF — Department of Agriculture):
+- VERY strict biosecurity — one of the toughest in the world.
+- ALL fresh or dried fruit, vegetables, meat, eggs, seeds, nuts, and plant material must be declared.
+- Many fresh and unprocessed items will be confiscated or treated at your expense.
+- Commercially sealed and heat-treated packaged goods (sealed chocolates, chips, biscuits) generally OK.
+- Failure to declare carries fines up to AUD $2,220 or criminal prosecution.
+- Always declare everything on the Incoming Passenger Card — inspectors use detector dogs.`);
+  }
+
+  // UAE / Gulf
+  if (hasAny(["DXB", "AUH", "SHJ", "DWC", "ADE", "MCT", "DOH", "BAH", "KWI", "RUH", "JED", "DMM"])) {
+    rules.push(`UAE / GULF STATES CUSTOMS:
+- Pork products and alcohol are heavily restricted or prohibited in most Gulf states (UAE, Qatar, Kuwait, Saudi Arabia, Bahrain).
+  - UAE: pork and pork-derived products may be purchased only in licensed shops; importing is restricted.
+  - Saudi Arabia: pork and alcohol strictly prohibited; confiscation and legal penalties apply.
+  - Qatar: pork restricted; alcohol only in licensed hotels and not for personal import.
+- All food must be Halal-certified for Muslim travelers or when in doubt.
+- Commercially sealed non-pork snacks and packaged foods are generally fine.
+- Medications: declare any controlled substances or large quantities of medicine.`);
+  }
+
+  // Mexico
+  if (hasAny(["MEX", "CUN", "GDL", "MTY", "TLC", "SJD", "PVR", "MID", "OAX", "VER"])) {
+    rules.push(`MEXICO CUSTOMS (SAT / SAGARPA):
+- Duty-free personal allowance: USD $500 in goods per adult (air travel).
+- Fresh fruits, vegetables, and meat products from abroad may be restricted — SAGARPA inspects for pests.
+- Commercial packaged and sealed food products are generally permitted within reasonable quantities.
+- Declare amounts of cash exceeding USD $10,000 equivalent.
+- Bringing food for personal consumption (sealed, commercially packaged) is usually fine — avoid bulk quantities.`);
+  }
+
+  // Canada
+  if (hasAny(["YYZ", "YUL", "YVR", "YYC", "YEG", "YOW", "YHZ", "YWG"])) {
+    rules.push(`CANADA CUSTOMS (CBSA):
+- Most commercially packaged, sealed food products are permitted.
+- Fresh fruits and vegetables may be restricted depending on origin country (declare and let CBSA inspect).
+- Meat and dairy from the US generally OK; from other countries, restrictions apply.
+- Duty-free: 1.5L wine or 1.14L spirits or 8.5L beer per adult (19+).
+- Declare ALL food items — inspectors use detector dogs; undeclared items result in fines.`);
+  }
+
+  if (rules.length === 0) {
+    rules.push(`DESTINATION CUSTOMS (general guidance):
+- Always declare food items at customs when crossing any international border.
+- Fresh fruits, vegetables, meat, dairy, and plants are commonly restricted — check the specific country's customs authority before traveling.
+- Commercially sealed and packaged shelf-stable foods are generally permitted in personal quantities.
+- When in doubt, consume perishables before landing or leave them behind.`);
+  }
+
+  return rules.join("\n\n");
 }
 
 function buildExtrasPrompt(data, pairingDays, ctx) {
@@ -705,6 +802,8 @@ function buildExtrasPrompt(data, pairingDays, ctx) {
 Only list items that are commercially packaged and sealed, canned, dried, or fully shelf-stable. This rule overrides all other preferences — if a food is prohibited at the US border, never include it in the grocery list.
 ` : "";
 
+  const destFoodRules = getDestinationFoodRules(ctx.destinations);
+
   return `You are a professional nutritionist specializing in aviation crew health.
 ${usaGroceryBlock}
 ${ctx.profile}
@@ -716,12 +815,15 @@ ${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}
 Daily itinerary:
 ${itinerary}
 
+DESTINATION CUSTOMS & FOOD RULES (use this as the basis for the "destination" field in foodRestrictions):
+${destFoodRules}
+
 Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pairingDays}-day nutrition plan (day-by-day meals are generated separately).
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ctx.gainTarget ? `, noting that it targets a calorie surplus (~${ctx.gainTarget} kcal/day) to support healthy weight and muscle gain` : ""}.
 - "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
-- "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
+- "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (summarize the DESTINATION CUSTOMS & FOOD RULES above into practical crew-focused bullet points for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
 }
 
 app.get("/", (req, res) => {
