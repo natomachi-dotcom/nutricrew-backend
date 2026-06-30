@@ -102,7 +102,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = process.env.FROM_EMAIL || "NutriCrew <crewmealplans@nutricrew.ca>";
 
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://nutricrew-frontend.vercel.app";
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://nutricrew.ca";
 
 const CRUD_API_BASE = process.env.CRUD_API_BASE;
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
