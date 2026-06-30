@@ -1161,9 +1161,12 @@ Look for: "RD" code for days off, route strings with dashes (YYC-LAS), WestJet o
 
 PORTER AIRLINES
 Airlines: PD.
+Aircraft: Embraer E195-E2 (mainline) and Dash 8-400 (regional).
 Layout: Monthly calendar grid. Pairing numbers with PD prefix or numeric.
-Hub: YTZ (Billy Bishop Toronto), YOW, YUL.
-Look for: YTZ, small regional Canadian routes, Porter branding.
+Hubs/Bases: YTZ (Billy Bishop Toronto — original base), YYZ (Toronto Pearson — E195-E2 operations), YOW (Ottawa), YUL (Montreal), YHZ (Halifax), YQB (Quebec City).
+US destinations (goingUsa = yes): EWR (Newark), BOS (Boston), ORD (Chicago), IAD/DCA (Washington), FLL (Fort Lauderdale), MCO (Orlando), TPA (Tampa), SRQ (Sarasota), RSW (Fort Myers), PBI (West Palm Beach), BDL (Hartford), BTV (Burlington VT).
+Codes: DO/RD=Day-off, SBY=Standby, TRG=Training.
+Look for: YTZ or YYZ combined with PD pairing numbers, Embraer E195 or Dash 8 references, Porter branding/logo.
 
 DELTA AIR LINES CCS
 Airlines: DL, 9E (Endeavor), OO (SkyWest codeshare).
