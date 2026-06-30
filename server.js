@@ -689,8 +689,20 @@ WEIGHT GAIN GOAL: targeting a calorie surplus for weight/muscle gain.
 
 function buildExtrasPrompt(data, pairingDays, ctx) {
   const itinerary = ctx.destinations.map((d, i) => `  Day ${i + 1}: ${d}`).join("\n");
-  return `You are a professional nutritionist specializing in aviation crew health.
+  const usaGroceryBlock = data.going_usa === "yes" ? `
+⚠️ HARD RULE — US BORDER CROSSING: Every item in the grocery list MUST be legal to carry across the US border (US CBP / USDA rules). Do NOT include any of the following:
+- Any fresh fruit (apples, oranges, mangoes, bananas, grapes, berries, citrus, stone fruits, etc.)
+- Any fresh vegetable (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)
+- Raw meat, poultry, or seafood of any kind
+- Raw eggs or hard-boiled eggs in the shell
+- Unpasteurized dairy or soft fresh cheese in unsealed containers
+- Fresh herbs with roots or soil
 
+Only list items that are commercially packaged and sealed, canned, dried, or fully shelf-stable. This rule overrides all other preferences — if a food is prohibited at the US border, never include it in the grocery list.
+` : "";
+
+  return `You are a professional nutritionist specializing in aviation crew health.
+${usaGroceryBlock}
 ${ctx.profile}
 
 ${ctx.kitchenAccessBlock}
@@ -704,7 +716,7 @@ Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pa
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ctx.gainTarget ? `, noting that it targets a calorie surplus (~${ctx.gainTarget} kcal/day) to support healthy weight and muscle gain` : ""}.
-- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}${data.going_usa === "yes" ? ". USA CUSTOMS: this trip goes to the USA — the grocery list MUST NOT include fresh fruits, fresh vegetables, raw meats, raw eggs, or unsealed fresh dairy, as these are prohibited by US CBP/USDA from entering the country. Only list commercially packaged, shelf-stable, or sealed items that are permitted through US customs." : ""}.
+- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
 - "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (food rules/restrictions for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
 }
 
