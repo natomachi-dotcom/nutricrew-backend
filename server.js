@@ -691,13 +691,18 @@ WEIGHT GAIN GOAL: targeting a calorie surplus for weight/muscle gain.
 - Include 2 snacks minimum per day (energy-dense: trail mix, nut butter, protein smoothie ingredients).
 - Avoid low-calorie-density "diet" foods.` : ""}
 ${!ctx.calorieTarget && !ctx.gainTarget && ctx.maintenanceTarget ? `
-MAINTENANCE CALORIE GOAL (HARD REQUIREMENT — NOT a diet):
-- This crew member is NOT trying to lose weight. Do NOT generate low-calorie diet meals.
-- Calculated TDEE: ${ctx.maintenanceTarget} kcal/day (Mifflin-St Jeor BMR × 1.55 activity multiplier for aviation crew)
-- REQUIRED: each day's total meal calories MUST be between ${ctx.maintenanceTarget - 100} and ${ctx.maintenanceTarget + 100} kcal.
-- Do NOT go below ${ctx.maintenanceTarget - 100} kcal. Do NOT produce "diet-sized" portions (~1200–1600 kcal) — that is a serious error.
-- To hit ${ctx.maintenanceTarget} kcal: make portions full-sized. Add calorie-dense ingredients (olive oil, avocado, nuts, whole grains, cheese, legumes). Ensure snacks are substantial (200–300 kcal each).
-- After generating all meals, mentally sum the calories. If the total is below ${ctx.maintenanceTarget - 100}, increase portion sizes or add a snack before finalizing.` : ""}`;
+MAINTENANCE CALORIE GOAL (HARD REQUIREMENT — this is NOT a diet plan):
+- Calculated TDEE: ${ctx.maintenanceTarget} kcal/day. This is the target. Do NOT go below ${ctx.maintenanceTarget - 100} kcal.
+- Each day MUST include EXACTLY 2 Snacks (not 1). The 5 meals cover: Breakfast, Lunch, Dinner, Snack, Snack.
+- Target calorie split across the 5 meals:
+    Breakfast: ~${Math.round(ctx.maintenanceTarget * 0.25)} kcal
+    Lunch:     ~${Math.round(ctx.maintenanceTarget * 0.30)} kcal
+    Dinner:    ~${Math.round(ctx.maintenanceTarget * 0.28)} kcal
+    Snack 1:   ~${Math.round(ctx.maintenanceTarget * 0.09)} kcal
+    Snack 2:   ~${Math.round(ctx.maintenanceTarget * 0.08)} kcal
+    Total:     ~${ctx.maintenanceTarget} kcal
+- Use full-sized portions. Add calorie-dense ingredients where needed: olive oil, avocado, nuts, cheese, whole grains, legumes, nut butter, Greek yogurt.
+- VERIFY: sum all 5 meal "calories" values. If total < ${ctx.maintenanceTarget - 100} kcal, increase portion sizes before finalizing.` : ""}`;
 }
 
 function getDestinationFoodRules(destinations) {
