@@ -691,10 +691,13 @@ WEIGHT GAIN GOAL: targeting a calorie surplus for weight/muscle gain.
 - Include 2 snacks minimum per day (energy-dense: trail mix, nut butter, protein smoothie ingredients).
 - Avoid low-calorie-density "diet" foods.` : ""}
 ${!ctx.calorieTarget && !ctx.gainTarget && ctx.maintenanceTarget ? `
-MAINTENANCE CALORIE GOAL: no deficit or surplus — fuel the crew member at their maintenance level.
-- Estimated daily maintenance: ${ctx.maintenanceTarget} kcal (Mifflin-St Jeor TDEE, activity ×1.55 for aviation crew)
-- Each day's meal "calories" SUM must be within ±150 kcal of ${ctx.maintenanceTarget}.
-- Use balanced, nutritious meals — do NOT arbitrarily reduce portions or calories below this target.` : ""}`;
+MAINTENANCE CALORIE GOAL (HARD REQUIREMENT — NOT a diet):
+- This crew member is NOT trying to lose weight. Do NOT generate low-calorie diet meals.
+- Calculated TDEE: ${ctx.maintenanceTarget} kcal/day (Mifflin-St Jeor BMR × 1.55 activity multiplier for aviation crew)
+- REQUIRED: each day's total meal calories MUST be between ${ctx.maintenanceTarget - 100} and ${ctx.maintenanceTarget + 100} kcal.
+- Do NOT go below ${ctx.maintenanceTarget - 100} kcal. Do NOT produce "diet-sized" portions (~1200–1600 kcal) — that is a serious error.
+- To hit ${ctx.maintenanceTarget} kcal: make portions full-sized. Add calorie-dense ingredients (olive oil, avocado, nuts, whole grains, cheese, legumes). Ensure snacks are substantial (200–300 kcal each).
+- After generating all meals, mentally sum the calories. If the total is below ${ctx.maintenanceTarget - 100}, increase portion sizes or add a snack before finalizing.` : ""}`;
 }
 
 function getDestinationFoodRules(destinations) {
