@@ -95,6 +95,10 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
   res.json({ received: true });
 });
 
+// Lightweight keep-warm endpoint — UptimeRobot / cron-job.org should ping
+// this every 5 min to prevent Render free-tier cold starts.
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
 app.use(express.json());
 
 const client = new Anthropic();
