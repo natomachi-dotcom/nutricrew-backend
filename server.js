@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import compression from "compression";
 import cors from "cors";
 import helmet from "helmet";
 import Anthropic from "@anthropic-ai/sdk";
@@ -9,6 +10,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { createHash, randomBytes } from "crypto";
 
 const app = express();
+app.use(compression());
 app.set("trust proxy", 1);
 // contentSecurityPolicy/CORP are tuned off/loosened: this is a JSON API with
 // no HTML to protect, and tightening CORP breaks cross-origin fetch() from
