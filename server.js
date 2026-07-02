@@ -1452,10 +1452,18 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
       const generateOneDay = (dayIndex) => {
         const overallDayNum = cachedDays.length + dayIndex + 1;
+        // 3200 tokens: multi-country customs tips can be verbose; 2200 caused
+        // the API to return a minimal 1-meal response when the output hit the cap.
         return runStructured(
           buildAllDaysPrompt(missingData, 1, missingCtx, overallDayNum),
-          DAYS_SCHEMA, 2200, FAST_MODEL
-        );
+          DAYS_SCHEMA, 3200, FAST_MODEL
+        ).then(r => {
+          const meals = r?.days?.[0]?.meals;
+          if (!meals || meals.length < 3) {
+            throw new Error(`Day ${overallDayNum} returned only ${meals?.length ?? 0} meals`);
+          }
+          return r;
+        });
       };
 
       const dayResults = await Promise.all(
