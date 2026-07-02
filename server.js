@@ -1989,41 +1989,41 @@ app.post("/api/push/subscribe", apiLimiter, async (req, res) => {
 
 // Exercises Haiku must choose from — each has a YouTube video ID for the thumbnail
 const EXERCISE_LIBRARY = [
-  { name: "Push-Up",               muscle: "Chest",       vid: "IODxDxX7oi4" },
-  { name: "Diamond Push-Up",       muscle: "Triceps",     vid: "J0DXBSpghaI" },
-  { name: "Pike Push-Up",          muscle: "Shoulders",   vid: "oMhDeQd7tYU" },
-  { name: "Squat",                 muscle: "Legs",        vid: "ultWZbUMPL8" },
-  { name: "Jump Squat",            muscle: "Legs",        vid: "CVaEhXotL7M" },
-  { name: "Lunge",                 muscle: "Legs",        vid: "QOVaHwm-Q6U" },
-  { name: "Reverse Lunge",         muscle: "Legs",        vid: "wrwwXE_x-pQ" },
-  { name: "Glute Bridge",          muscle: "Glutes",      vid: "OUgsJ8-Vi0E" },
-  { name: "Calf Raise",            muscle: "Calves",      vid: "gwLzBJYoWlA" },
-  { name: "Wall Sit",              muscle: "Legs",        vid: "y-wV4Venusw"  },
-  { name: "Plank",                 muscle: "Core",        vid: "pSHjTRaRanQ"  },
-  { name: "Side Plank",            muscle: "Core",        vid: "K2VljzCC16g"  },
-  { name: "Crunch",                muscle: "Core",        vid: "Xyd_fa5zoEU"  },
-  { name: "Bicycle Crunch",        muscle: "Core",        vid: "9FGilxCbdz8"  },
-  { name: "Leg Raise",             muscle: "Core",        vid: "JB2oyawG9KI"  },
-  { name: "Russian Twist",         muscle: "Core",        vid: "wkD8rjkodUI"  },
-  { name: "Superman",              muscle: "Back",        vid: "cc6UVNTKZAA"  },
-  { name: "Mountain Climber",      muscle: "Cardio",      vid: "nmwgirgXLYM"  },
-  { name: "Burpee",                muscle: "Cardio",      vid: "dZgVxmf6jkA"  },
-  { name: "Jumping Jack",          muscle: "Cardio",      vid: "c4DAnQ6DtF8"  },
-  { name: "High Knee",             muscle: "Cardio",      vid: "8opcQdC-V-U"  },
-  { name: "Tricep Dip",            muscle: "Triceps",     vid: "0326dy_-CzM"  },
-  { name: "Dumbbell Curl",         muscle: "Biceps",      vid: "ykJmrZ5v0Oo"  },
-  { name: "Dumbbell Shoulder Press",muscle: "Shoulders",  vid: "qEwKCR5JCog"  },
-  { name: "Dumbbell Row",          muscle: "Back",        vid: "pYcpY20QaE8"  },
-  { name: "Dumbbell Squat",        muscle: "Legs",        vid: "Dy55_GsGGvU"  },
-  { name: "Dumbbell Lunge",        muscle: "Legs",        vid: "L8fvypPrzzs"  },
-  { name: "Hip Flexor Stretch",    muscle: "Flexibility", vid: "gX7I-j2JkCE"  },
-  { name: "Hamstring Stretch",     muscle: "Flexibility", vid: "7kFJtCJMqRs"  },
-  { name: "Child's Pose",          muscle: "Flexibility", vid: "qZ_KahQm4ac"  },
-  { name: "Cat-Cow",               muscle: "Flexibility", vid: "kqnua4rHVVA"  },
-  { name: "Downward Dog",          muscle: "Flexibility", vid: "j97SSGsnCAQ"  },
-  { name: "Pigeon Pose",           muscle: "Flexibility", vid: "Qq4MJMoaEWM"  },
-  { name: "Neck Roll",             muscle: "Flexibility", vid: "Zp-JfaLPMOk"  },
-  { name: "Shoulder Roll",         muscle: "Flexibility", vid: "y7s3BfObUPM"  },
+  { name: "Push-Up",               muscle: "Chest",       vid: "IODxDxX7oi4", eq: "bw" },
+  { name: "Diamond Push-Up",       muscle: "Triceps",     vid: "J0DXBSpghaI", eq: "bw" },
+  { name: "Pike Push-Up",          muscle: "Shoulders",   vid: "oMhDeQd7tYU", eq: "bw" },
+  { name: "Squat",                 muscle: "Legs",        vid: "ultWZbUMPL8", eq: "bw" },
+  { name: "Jump Squat",            muscle: "Legs",        vid: "CVaEhXotL7M", eq: "bw" },
+  { name: "Lunge",                 muscle: "Legs",        vid: "QOVaHwm-Q6U", eq: "bw" },
+  { name: "Reverse Lunge",         muscle: "Legs",        vid: "wrwwXE_x-pQ", eq: "bw" },
+  { name: "Glute Bridge",          muscle: "Glutes",      vid: "OUgsJ8-Vi0E", eq: "bw" },
+  { name: "Calf Raise",            muscle: "Calves",      vid: "gwLzBJYoWlA", eq: "bw" },
+  { name: "Wall Sit",              muscle: "Legs",        vid: "y-wV4Venusw",  eq: "bw" },
+  { name: "Plank",                 muscle: "Core",        vid: "pSHjTRaRanQ",  eq: "bw" },
+  { name: "Side Plank",            muscle: "Core",        vid: "K2VljzCC16g",  eq: "bw" },
+  { name: "Crunch",                muscle: "Core",        vid: "Xyd_fa5zoEU",  eq: "bw" },
+  { name: "Bicycle Crunch",        muscle: "Core",        vid: "9FGilxCbdz8",  eq: "bw" },
+  { name: "Leg Raise",             muscle: "Core",        vid: "JB2oyawG9KI",  eq: "bw" },
+  { name: "Russian Twist",         muscle: "Core",        vid: "wkD8rjkodUI",  eq: "bw" },
+  { name: "Superman",              muscle: "Back",        vid: "cc6UVNTKZAA",  eq: "bw" },
+  { name: "Mountain Climber",      muscle: "Cardio",      vid: "nmwgirgXLYM",  eq: "bw" },
+  { name: "Burpee",                muscle: "Cardio",      vid: "dZgVxmf6jkA",  eq: "bw" },
+  { name: "Jumping Jack",          muscle: "Cardio",      vid: "c4DAnQ6DtF8",  eq: "bw" },
+  { name: "High Knee",             muscle: "Cardio",      vid: "8opcQdC-V-U",  eq: "bw" },
+  { name: "Tricep Dip",            muscle: "Triceps",     vid: "0326dy_-CzM",  eq: "bw" },
+  { name: "Dumbbell Curl",         muscle: "Biceps",      vid: "ykJmrZ5v0Oo",  eq: "db" },
+  { name: "Dumbbell Shoulder Press",muscle: "Shoulders",  vid: "qEwKCR5JCog",  eq: "db" },
+  { name: "Dumbbell Row",          muscle: "Back",        vid: "pYcpY20QaE8",  eq: "db" },
+  { name: "Dumbbell Squat",        muscle: "Legs",        vid: "Dy55_GsGGvU",  eq: "db" },
+  { name: "Dumbbell Lunge",        muscle: "Legs",        vid: "L8fvypPrzzs",  eq: "db" },
+  { name: "Hip Flexor Stretch",    muscle: "Flexibility", vid: "gX7I-j2JkCE",  eq: "bw" },
+  { name: "Hamstring Stretch",     muscle: "Flexibility", vid: "7kFJtCJMqRs",  eq: "bw" },
+  { name: "Child's Pose",          muscle: "Flexibility", vid: "qZ_KahQm4ac",  eq: "bw" },
+  { name: "Cat-Cow",               muscle: "Flexibility", vid: "kqnua4rHVVA",  eq: "bw" },
+  { name: "Downward Dog",          muscle: "Flexibility", vid: "j97SSGsnCAQ",  eq: "bw" },
+  { name: "Pigeon Pose",           muscle: "Flexibility", vid: "Qq4MJMoaEWM",  eq: "bw" },
+  { name: "Neck Roll",             muscle: "Flexibility", vid: "Zp-JfaLPMOk",  eq: "bw" },
+  { name: "Shoulder Roll",         muscle: "Flexibility", vid: "y7s3BfObUPM",  eq: "bw" },
 ];
 
 const EXERCISE_NAME_LIST = EXERCISE_LIBRARY.map(e => e.name).join(", ");
@@ -2098,6 +2098,17 @@ app.post("/api/gym-plan/generate", apiLimiter, async (req, res) => {
     }
 
     const goals = (profile?.goals || ["energy"]).join(", ");
+    const gender = profile?.gender || "female";
+    const kitchen = [].concat(profile?.kitchen || []);
+    // Crew without a home kitchen (hotel or airplane food only) have no gym equipment
+    const hasEquipment = kitchen.length > 0 && !kitchen.every(k => ["hotel_no_kitchen", "airplane_food"].includes(k));
+    const availableExercises = hasEquipment
+      ? EXERCISE_NAME_LIST
+      : EXERCISE_LIBRARY.filter(e => e.eq === "bw").map(e => e.name).join(", ");
+    const equipmentNote = hasEquipment
+      ? "Equipment: home gym access allowed — dumbbells permitted on off days."
+      : "Equipment: NO gym equipment available. Use ONLY bodyweight exercises on ALL days. Never suggest dumbbells or machines.";
+
     const pairingLines = pairings.map(p => {
       const start = p.pairingDate ? new Date(p.pairingDate).toISOString().split("T")[0] : "?";
       const end   = p.returnDate  ? new Date(p.returnDate).toISOString().split("T")[0]  : "?";
@@ -2106,19 +2117,21 @@ app.post("/api/gym-plan/generate", apiLimiter, async (req, res) => {
 
     const prompt = `You are a fitness coach for flight crew. Create a monthly gym plan tailored to their roster.
 
+Gender: ${gender}
 Goals: ${goals}
 Position: ${profile?.position || "cabin"}
+${equipmentNote}
 
 Roster schedule:
 ${pairingLines}
 
 Rules:
-- "off" days (not in any pairing): 40-50 min full workout, 5-6 exercises
-- "layover" days (hotel, mid-pairing): 20 min hotel circuit, 4-5 bodyweight exercises only
+- "off" days (not in any pairing): 40-50 min full workout, 5-6 exercises — bodyweight circuits unless equipment is available
+- "layover" days (hotel, mid-pairing): 20 min hotel room circuit, 4-5 bodyweight exercises only, no equipment
 - "pairing" days (departure/arrival day of a trip): 15 min stretch/mobility only, 3-4 exercises from Flexibility
 - "rest" days (day after long trip): rest — set workout to null
 
-Use ONLY these exercise names (exact spelling): ${EXERCISE_NAME_LIST}
+Use ONLY these exercise names (exact spelling): ${availableExercises}
 
 Cover the calendar from today through the last return date. Group into weeks starting Monday.
 Return compact JSON, no commentary.`;
