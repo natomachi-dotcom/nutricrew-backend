@@ -754,8 +754,9 @@ function buildContext(data, lang, pairingDays) {
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
   const cognitivePerfRules = getCognitivePerfRules(data);
+  const restrictedBorders = detectRestrictedBorders(data.destinations, data.going_usa);
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules, restrictedBorders };
 }
 
 function buildAllDaysPrompt(data, pairingDays, ctx, startDayNum = 1) {
@@ -771,20 +772,10 @@ function buildAllDaysPrompt(data, pairingDays, ctx, startDayNum = 1) {
     return `Day ${dayNum} — Location: ${loc}. ${budgetLine} ${jetlagInstr}`;
   }).join("\n");
 
-  const usaCustomsBlock = data.going_usa === "yes" ? `
-⚠️ HARD RULE — US BORDER CROSSING: Every single meal and ingredient in this plan MUST be legal to carry across the US border (US CBP / USDA rules). Do NOT include anything from this list in ANY meal, ingredient, or snack:
-- Any fresh fruit (apples, oranges, mangoes, bananas, grapes, berries, citrus, stone fruits, etc.)
-- Any fresh vegetable (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)
-- Raw meat, poultry, or seafood of any kind
-- Raw eggs or hard-boiled eggs in the shell
-- Unpasteurized dairy or soft fresh cheese (ricotta, cottage cheese) in unsealed containers
-- Fresh herbs with roots or soil
-
-Only use ingredients that are commercially packaged and sealed, canned, dried, or fully shelf-stable. Examples: canned tuna, canned chicken, sealed deli pouches, hard cheese in sealed packaging, sealed pasteurized dairy, dried fruits, nuts, granola bars, crackers, packaged bread, canned beans, instant oats, packaged trail mix. This rule overrides all other preferences — if a food is prohibited at the US border, never include it.
-` : "";
+  const carriedFoodBlock = buildCarriedFoodPromptBlock(ctx.restrictedBorders);
 
   return `You are a professional nutritionist specializing in aviation crew health.
-${usaCustomsBlock}
+${carriedFoodBlock ? carriedFoodBlock + "\n" : ""}
 ${ctx.profile}
 
 ${ctx.kitchenAccessBlock}
@@ -953,24 +944,169 @@ ${DISCLAIMER}`);
   return rules.join("\n\n");
 }
 
+// ─── CARRIED-FOOD / BORDER-CROSSING RULES ─────────────────────────────────────
+// Crew carry ONE bag for the whole pairing. Any food packed at home or carried
+// between stops must clear the customs of EVERY restricted country in the trip,
+// not just the country where that food is "used". The UNION of all bans applies
+// to packed/carried items; locally-purchased same-stop food stays unrestricted.
+
+const BORDER_COUNTRY_RULES = [
+  {
+    id: "australia",
+    name: "Australia (DAFF biosecurity)",
+    codes: ["SYD","MEL","BNE","PER","ADL","CBR","OOL","CNS","DRW","HBA","TSV","MKY","ROK","LST"],
+    carriedBans: [
+      "Fresh or dried fruit of any kind",
+      "Fresh or dried vegetables of any kind",
+      "Meat, poultry, or seafood (unless commercially heat-treated and sealed)",
+      "Eggs or egg products (unless commercially sealed/pasteurized)",
+      "Seeds and nuts (unless commercially sealed/packaged)",
+      "Any unpackaged plant material",
+    ],
+  },
+  {
+    id: "usa",
+    name: "USA (CBP/USDA)",
+    usaFlagTrigger: true,
+    codes: [
+      "JFK","LAX","ORD","ATL","DFW","DEN","SFO","SEA","MIA","BOS","IAD","IAH",
+      "PHX","MCO","LAS","MSP","DTW","FLL","CLT","EWR","PHL","SLC","MDW","BWI",
+      "SAN","TPA","HNL","PDX","BNA","AUS","RDU","SJC","OAK","MKE","SMF","MSY",
+      "RSW","PIT","CMH","ABQ","ONT","BUF","PVD","JAX","ANC","CLE","IND","CVG",
+      "OMA","KCI","GRR","SNA","DAL","HOU","SAT","BDL","ORF","RIC","GEG","MEM",
+      "BHM","TUS","ELP","STL",
+    ],
+    carriedBans: [
+      "Any fresh fruit (apples, oranges, mangoes, bananas, grapes, berries, citrus, stone fruits, etc.)",
+      "Any fresh vegetable (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)",
+      "Raw or undercooked meat, poultry, or seafood",
+      "Raw eggs or hard-boiled eggs in the shell",
+      "Unpasteurized dairy or soft fresh cheese in unsealed containers",
+      "Fresh herbs with roots or soil",
+    ],
+  },
+  {
+    id: "japan",
+    name: "Japan (MAFF quarantine)",
+    codes: ["NRT","HND","KIX","NGO","CTS","FUK","OKA","OIT","KMI","KMJ","SDJ"],
+    carriedBans: [
+      "Fresh fruits and vegetables (strict plant quarantine — most prohibited without inspection certificate)",
+      "Unprocessed or uninspected meat/poultry (especially pork from FMD-risk countries)",
+      "Plants with soil or roots",
+    ],
+  },
+  {
+    id: "eu",
+    name: "EU/Schengen border",
+    codes: [
+      "CDG","ORY","NCE","LYS","MRS","TLS","NTE","BOD","SXB","MPL","LIL",
+      "FRA","MUC","BER","HAM","DUS","CGN","STR","NUE","HAJ","DTM","LEJ",
+      "AMS","EIN","BRU","CRL","LUX","MAD","BCN","PMI","AGP","ALC","VLC",
+      "SVQ","LIS","OPO","FAO","FCO","MXP","LIN","NAP","VCE","BLQ","CTA",
+      "BGY","PMO","VIE","SZG","ZRH","GVA","BSL","ARN","GOT","MMX","CPH",
+      "AAL","BLL","HEL","TMP","OSL","BGO","TRD","WAW","KRK","PRG","BUD",
+      "OTP","SOF","LJU","ZAG","RIX","TLL","VNO","ATH","SKG","HER","RHO",
+      "MLA","DUB","ORK","SNN",
+    ],
+    carriedBans: [
+      "Meat and meat products from outside the EU",
+      "Dairy products from outside the EU",
+      "Fresh fruits and vegetables from non-EU countries (without phytosanitary certificate)",
+    ],
+  },
+  {
+    id: "uk",
+    name: "United Kingdom (HMRC/DEFRA)",
+    codes: ["LHR","LGW","LTN","LCY","STN","MAN","EDI","GLA","BHX","BRS","NCL","LBA","ABZ","BFS","BHD","SOU","EXT","CWL"],
+    carriedBans: [
+      "Meat and dairy from outside the UK (post-Brexit — EU products are also restricted)",
+      "Fresh fruit and vegetables from non-EU countries without phytosanitary certificates",
+    ],
+  },
+  {
+    id: "uae",
+    name: "UAE/Gulf States",
+    codes: ["DXB","AUH","SHJ","DWC","AAN","RKT","FJR","DOH","MCT","SLL","KWI","BAH","RUH","JED","DMM","MED","TUU","AHB","GIZ"],
+    carriedBans: [
+      "Pork products of any kind",
+      "Alcoholic beverages",
+    ],
+  },
+];
+
+// Returns array of restricted-border entries that apply to this pairing.
+// Each entry carries the days[] it was detected on (empty = triggered by going_usa flag
+// with no specific airport found in destinations).
+function detectRestrictedBorders(destinations, goingUsa) {
+  const dests = destinations || [];
+  const found = [];
+  for (const rule of BORDER_COUNTRY_RULES) {
+    const days = [];
+    dests.forEach((d, i) => {
+      if (d && rule.codes.includes((d || "").toUpperCase().trim())) days.push(i + 1);
+    });
+    const triggered = days.length > 0 || (rule.usaFlagTrigger && goingUsa === "yes");
+    if (triggered) found.push({ id: rule.id, name: rule.name, carriedBans: rule.carriedBans, days });
+  }
+  return found;
+}
+
+// Union of every banned item across all restricted borders (deduped by text).
+function unionCarriedBans(restrictedBorders) {
+  const seen = new Set();
+  const bans = [];
+  for (const b of restrictedBorders) {
+    for (const ban of b.carriedBans) {
+      if (!seen.has(ban)) { seen.add(ban); bans.push(ban); }
+    }
+  }
+  return bans;
+}
+
+// Prompt block injected into the DAYS and EXTRAS AI prompts.
+function buildCarriedFoodPromptBlock(restrictedBorders) {
+  if (!restrictedBorders || restrictedBorders.length === 0) return "";
+  const countryLines = restrictedBorders.map(b => {
+    const dayStr = b.days.length > 0
+      ? ` (Day${b.days.length > 1 ? "s" : ""} ${b.days.join(" & ")})`
+      : " (during this pairing)";
+    return `  • ${b.name}${dayStr}`;
+  }).join("\n");
+  const banLines = unionCarriedBans(restrictedBorders).map(b => `  ❌ ${b}`).join("\n");
+  return `⚠️ CROSS-BORDER CARRIED-FOOD RULES — HARD REQUIREMENT:
+Crew carry ONE bag for the whole pairing. This pairing crosses:
+${countryLines}
+ANY food pre-packed at home, carried between days, or kept as leftovers must clear ALL these customs checkpoints. The union of all bans applies — NEVER pack or carry:
+${banLines}
+For ALL packed/carried meals and snacks: use ONLY commercially packaged/sealed, canned, dried, or shelf-stable ingredients.
+
+LOCALLY-PURCHASED, SAME-STOP MEALS (bought AND fully consumed at one stop before the next flight):
+• CAN use fresh local ingredients — they never cross a border in the bag.
+• In the meal "tip" field: note "Buy locally at [stop] and consume before next flight — do not pack leftovers."
+For any packed/carried meal "tip": briefly explain WHY shelf-stable — e.g. "Canned tuna used: packed items must clear USA and Japan customs."`;
+}
+
+// User-facing text added server-side to foodRestrictions.carried — not generated by the model.
+function buildCarriedFoodNote(restrictedBorders) {
+  if (!restrictedBorders || restrictedBorders.length === 0) return null;
+  const countryStrs = restrictedBorders.map(b => {
+    const dayStr = b.days.length > 0 ? ` (Day ${b.days.join(", ")})` : "";
+    return `${b.name}${dayStr}`;
+  });
+  const bans = unionCarriedBans(restrictedBorders);
+  return `Your bag crosses ${countryStrs.length > 1 ? "multiple restricted borders" : "a restricted border"} on this pairing: ${countryStrs.join("; ")}.\n\nAny food packed at home or carried between stops must clear ALL of these customs checkpoints. The following items cannot be packed or carried anywhere on this pairing:\n${bans.map(b => `• ${b}`).join("\n")}\n\nLocally-purchased food bought and eaten entirely at one stop (nothing packed for later) does not have these restrictions.\n\nSafe to pack and carry: commercially packaged and sealed, canned, dried, or shelf-stable items only.`;
+}
+
 function buildExtrasPrompt(data, pairingDays, ctx) {
   const itinerary = ctx.destinations.map((d, i) => `  Day ${i + 1}: ${d}`).join("\n");
-  const usaGroceryBlock = data.going_usa === "yes" ? `
-⚠️ HARD RULE — US BORDER CROSSING: Every item in the grocery list MUST be legal to carry across the US border (US CBP / USDA rules). Do NOT include any of the following:
-- Any fresh fruit (apples, oranges, mangoes, bananas, grapes, berries, citrus, stone fruits, etc.)
-- Any fresh vegetable (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)
-- Raw meat, poultry, or seafood of any kind
-- Raw eggs or hard-boiled eggs in the shell
-- Unpasteurized dairy or soft fresh cheese in unsealed containers
-- Fresh herbs with roots or soil
-
-Only list items that are commercially packaged and sealed, canned, dried, or fully shelf-stable. This rule overrides all other preferences — if a food is prohibited at the US border, never include it in the grocery list.
-` : "";
+  // Carried-food block applies to the grocery list: items you buy at home to pack
+  // must clear every restricted border in the pairing. Same union logic as DAYS prompt.
+  const carriedGroceryBlock = buildCarriedFoodPromptBlock(ctx.restrictedBorders);
 
   const destFoodRules = getDestinationFoodRules(ctx.destinations);
 
   return `You are a professional nutritionist specializing in aviation crew health.
-${usaGroceryBlock}
+${carriedGroceryBlock ? carriedGroceryBlock + "\n" : ""}
 ${ctx.profile}
 
 ${ctx.kitchenAccessBlock}
@@ -980,15 +1116,15 @@ ${ctx.budgetGuidance ? `\n${ctx.budgetGuidance}\n` : ""}
 Daily itinerary:
 ${itinerary}
 
-DESTINATION CUSTOMS & FOOD RULES (use this as the basis for the "destination" field in foodRestrictions):
+DESTINATION CUSTOMS & FOOD RULES (for the "destination" field in foodRestrictions):
 ${destFoodRules}
 
 Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pairingDays}-day nutrition plan (day-by-day meals are generated separately).
 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ctx.gainTarget ? `, noting that it targets a calorie surplus (~${ctx.gainTarget} kcal/day) to support healthy weight and muscle gain` : ""}.
-- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) covering the whole pairing. IMPORTANT: every item in the grocery list must comply with the DIET RULES above — do not include any ingredient that violates the diet (e.g. no meat in a vegetarian list, no dairy in a vegan or dairy-free list, no gluten in a gluten-free list, no plant items in a carnivore list). Base items on the crew's kitchen access constraints (e.g. only ready-to-eat/no-prep items if no cooking equipment is available)${ctx.hasBudget ? ` and budget — keep total grocery costs realistically within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
-- "foodRestrictions": "usa" (detailed list of what cannot be brought into the USA and why; if going_usa is "no", write "Not applicable — not traveling to the USA"), "destination" (summarize the DESTINATION CUSTOMS & FOOD RULES above into practical crew-focused bullet points for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
+- "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) for items to buy at home and CARRY on the pairing. IMPORTANT: (1) every item must comply with the DIET RULES above; (2) if CROSS-BORDER CARRIED-FOOD RULES are stated above, EVERY item in the grocery list must comply — do not include any banned carried item; (3) base items on kitchen access constraints${ctx.hasBudget ? `; (4) keep total costs within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
+- "foodRestrictions": "usa" (${data.going_usa === "yes" ? "practical list of what cannot be brought into the USA and why" : "Not applicable — not traveling to the USA"}), "destination" (summarize the DESTINATION CUSTOMS & FOOD RULES above into practical crew-focused bullet points for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
 }
 
 app.get("/", (req, res) => {
@@ -1226,7 +1362,9 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       cacheKey.kitchenKey, cacheKey.calorieTargetKey, cacheKey.cookingKey,
       cacheKey.lang, pairingDays,
     ].join("|");
-    const bankEntries = PLAN_BANK_MAP[bankLookupKey] || [];
+    // Skip the bank when any restricted border is in the pairing — bank entries were
+    // generated without carried-food constraints and may include prohibited items.
+    const bankEntries = ctx.restrictedBorders.length === 0 ? (PLAN_BANK_MAP[bankLookupKey] || []) : [];
     if (bankEntries.length > 0) {
       const usage = await checkPairingUsage(email, data.name, req.ip);
       if (!usage.allowed) {
@@ -1377,6 +1515,12 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     }
 
     const extras = await extrasPromise;
+
+    // Inject the server-computed carried-food note (deterministic, not from the model).
+    const carriedNote = buildCarriedFoodNote(ctx.restrictedBorders);
+    if (carriedNote) {
+      extras.foodRestrictions = { ...extras.foodRestrictions, carried: carriedNote };
+    }
 
     // Fire-and-forget: mark seen + increment (neither blocks the response)
     markDaysSeen(email, [...cachedDayIds, ...newDayIds]);
