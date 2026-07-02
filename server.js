@@ -61,8 +61,9 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
       const email = session.customer_email || session.metadata?.email;
+      console.log(`[webhook] checkout.session.completed id=${event.id} email=${email} customer=${session.customer}`);
       if (email) {
-        await fetch(`${CRUD_API_BASE}/api/set-premium`, {
+        const r = await fetch(`${CRUD_API_BASE}/api/set-premium`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
           body: JSON.stringify({
@@ -71,25 +72,42 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
             stripeSubscriptionId: session.subscription || null,
           }),
         });
+        if (!r.ok) {
+          const body = await r.text().catch(() => "");
+          console.error(`[webhook] set-premium failed: ${r.status} ${body}`);
+          return res.status(500).json({ error: "Failed to update user premium status" });
+        }
+        console.log(`[webhook] set-premium ok for ${email}`);
       }
     } else if (event.type === "customer.subscription.deleted") {
       const subscription = event.data.object;
-      await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
+      console.log(`[webhook] subscription.deleted customer=${subscription.customer}`);
+      const r = await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
         body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium: false }),
       });
+      if (!r.ok) {
+        console.error(`[webhook] set-premium-by-customer failed: ${r.status}`);
+        return res.status(500).json({ error: "Failed to revoke user premium status" });
+      }
     } else if (event.type === "customer.subscription.updated") {
       const subscription = event.data.object;
       const isPremium = ["active", "trialing"].includes(subscription.status);
-      await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
+      console.log(`[webhook] subscription.updated customer=${subscription.customer} status=${subscription.status} isPremium=${isPremium}`);
+      const r = await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
         body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium }),
       });
+      if (!r.ok) {
+        console.error(`[webhook] set-premium-by-customer failed: ${r.status}`);
+        return res.status(500).json({ error: "Failed to update user premium status" });
+      }
     }
   } catch (err) {
     console.error("Stripe webhook handling failed:", err.message);
+    return res.status(500).json({ error: "Webhook handling failed" });
   }
 
   res.json({ received: true });
@@ -414,7 +432,9 @@ function estimateTDEE(data) {
   const weightVal = parseFloat(weightStr);
   if (!weightVal) return null;
   const weightKg = /lb/i.test(weightStr) ? weightVal / 2.20462 : weightVal;
-  const age = parseInt(data.age || 35, 10);
+  let age = parseInt(data.age, 10);
+  if (!age && data.dob) age = Math.floor((Date.now() - new Date(data.dob)) / (365.25 * 24 * 60 * 60 * 1000));
+  if (!age || age < 16 || age > 80) age = 35;
   const bmr = data.gender === "male"
     ? (10 * weightKg) + (6.25 * 170) - (5 * age) + 5
     : (10 * weightKg) + (6.25 * 170) - (5 * age) - 161;
@@ -1064,7 +1084,13 @@ function buildCacheKey(data, ctx, lang) {
   const perDay = ctx.perDayBudget;
   const budgetLevel = !perDay ? "none" : perDay > 50 ? "high" : perDay > 20 ? "medium" : "low";
   const kitchen = (data.kitchen || []).slice().sort();
-  const ct = ctx.calorieTarget ? String(Math.round(ctx.calorieTarget / 100) * 100) : (ctx.gainTarget ? `gain${Math.round(ctx.gainTarget / 100) * 100}` : "none");
+  const ct = ctx.calorieTarget
+    ? String(Math.round(ctx.calorieTarget / 100) * 100)
+    : ctx.gainTarget
+      ? `gain${Math.round(ctx.gainTarget / 100) * 100}`
+      : ctx.maintenanceTarget
+        ? `maint${Math.round(ctx.maintenanceTarget / 200) * 200}`
+        : "none";
   return {
     dietKey: diets.join(",") || "none",
     goalKey: goals.join(",") || "none",
@@ -1190,6 +1216,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
       const missingData = { ...data, pairing_days: missing };
       const missingCtx = buildContext(missingData, lang, missing);
+      console.log(`[calorie-debug] gender=${missingData.gender} weight=${missingData.weight} dob=${missingData.dob} age=${missingData.age} → maintenanceTarget=${missingCtx.maintenanceTarget} calorieTarget=${missingCtx.calorieTarget} gainTarget=${missingCtx.gainTarget} cacheKey.calorieTargetKey=${buildCacheKey(missingData, missingCtx, lang).calorieTargetKey}`);
       const daysResult = await runStructured(
         buildAllDaysPrompt(missingData, missing, missingCtx),
         DAYS_SCHEMA, maxDayTokens, FAST_MODEL
