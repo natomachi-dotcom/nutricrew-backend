@@ -8,6 +8,20 @@ import { Resend } from "resend";
 import Stripe from "stripe";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { createHash, randomBytes } from "crypto";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+const __serverDir = dirname(fileURLToPath(import.meta.url));
+let PLAN_BANK_MAP = {};
+try {
+  const raw = JSON.parse(readFileSync(join(__serverDir, "plans-bank.json"), "utf8"));
+  PLAN_BANK_MAP = raw.plans || {};
+  const count = Object.values(PLAN_BANK_MAP).reduce((s, a) => s + a.length, 0);
+  console.log(`[bank] Loaded ${count} pre-generated plan entries`);
+} catch {
+  console.log("[bank] plans-bank.json not found — bank disabled, all plans go to AI");
+}
 
 const app = express();
 app.use(compression());
@@ -1182,7 +1196,52 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     const ctx = buildContext(data, lang, pairingDays);
     const cacheKey = buildCacheKey(data, ctx, lang);
     const extrasKey = buildExtrasCacheKey(data, ctx, lang, pairingDays);
+    const reqDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
 
+    // ── Bank check (sync, in-memory, ~0ms) ───────────────────────
+    // Returns a pre-generated plan instantly for common combos before
+    // touching the DB or calling the AI.
+    const bankLookupKey = [
+      cacheKey.dietKey, cacheKey.goalKey, cacheKey.budgetLevel,
+      cacheKey.kitchenKey, cacheKey.calorieTargetKey, cacheKey.cookingKey,
+      cacheKey.lang, pairingDays,
+    ].join("|");
+    const bankEntries = PLAN_BANK_MAP[bankLookupKey] || [];
+    if (bankEntries.length > 0) {
+      const usage = await checkPairingUsage(email, data.name, req.ip);
+      if (!usage.allowed) {
+        return res.status(403).json({
+          error: "premium_required",
+          message: "You've used your free pairing plan. Upgrade to Premium for unlimited plans.",
+          pairingCount: usage.pairingCount,
+        });
+      }
+      if (reqDiets.includes("calorie_deficit") && !usage.isPremium) {
+        return res.status(403).json({
+          error: "premium_required",
+          message: "Calorie Deficit plans are a Premium feature. Upgrade to Premium to unlock this and unlimited plans.",
+          pairingCount: usage.pairingCount,
+        });
+      }
+      const entry = bankEntries[Math.floor(Math.random() * bankEntries.length)];
+      // Fire-and-forget: seed the DB cache so repeat requests get fresh AI variety
+      storeCachedDays(entry.days, cacheKey)
+        .then(r => { if (r.ids?.length) markDaysSeen(email, r.ids); })
+        .catch(() => {});
+      incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
+      console.log(`[bank] HIT for ${email}: ${bankLookupKey}`);
+      return res.json({
+        summary: entry.summary,
+        days: entry.days,
+        groceryList: entry.groceryList,
+        foodRestrictions: entry.foodRestrictions,
+        performanceAdvisory: getCognitivePerfRules(data),
+        pairingCount: usage.pairingCount + 1,
+        isPremium: usage.isPremium,
+      });
+    }
+
+    // ── Normal flow (bank miss) ───────────────────────────────────
     // Run auth check, meal cache query, and extras cache query all in parallel
     const [usage, { days: cachedDays }, cachedExtras] = await Promise.all([
       checkPairingUsage(email, data.name, req.ip),
@@ -1198,7 +1257,6 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       });
     }
 
-    const reqDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
     if (reqDiets.includes("calorie_deficit") && !usage.isPremium) {
       return res.status(403).json({
         error: "premium_required",
