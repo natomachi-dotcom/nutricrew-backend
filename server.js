@@ -296,6 +296,9 @@ function extractJSON(message) {
 
 function handleAnthropicError(err, res) {
   console.error(err);
+  if (err.status === 504 || err.name === 'AbortError') {
+    return res.status(504).json({ error: "Request timed out. Please try again." });
+  }
   if (err.status) return res.status(err.status).json({ error: err.message });
   if (err instanceof Anthropic.APIError) {
     return res.status(err.status || 500).json({ error: err.message });
@@ -416,7 +419,22 @@ async function runStructured(prompt, schema, maxTokens, model = FAST_MODEL) {
     output_config: { format: { type: "json_schema", schema } },
     messages: [{ role: "user", content: prompt }],
   });
-  const message = await stream.finalMessage();
+  let timeoutId;
+  const timeoutPromise = new Promise((_, rej) => {
+    timeoutId = setTimeout(
+      () => rej(Object.assign(new Error("AI request timed out"), { status: 504 })),
+      45000
+    );
+  });
+  let message;
+  try {
+    message = await Promise.race([stream.finalMessage(), timeoutPromise]);
+  } catch (e) {
+    try { stream.controller?.abort(); } catch {}
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (message.stop_reason === "refusal") {
     throw Object.assign(new Error("The model declined to generate this content."), { status: 502 });
   }
@@ -706,10 +724,10 @@ function buildContext(data, lang, pairingDays) {
   return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules };
 }
 
-function buildAllDaysPrompt(data, pairingDays, ctx) {
+function buildAllDaysPrompt(data, pairingDays, ctx, startDayNum = 1) {
   const daySpecs = Array.from({ length: pairingDays }, (_, i) => {
-    const dayNum = i + 1;
-    const loc = ctx.destinations[i] || data.departure;
+    const dayNum = startDayNum + i;
+    const loc = ctx.destinations[startDayNum - 1 + i] || data.departure;
     const jetlagInstr = ctx.jetlag && dayNum === 1
       ? `jetlagNote: short, practical meal-timing advice for adjusting to the jet lag above. Phrase purely in ${loc} local time — no cross-timezone clock conversions, no "eastward"/"westward" direction.`
       : `jetlagNote: null`;
@@ -1210,26 +1228,51 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       }));
       console.log(`[meal-cache] HIT for ${email}: days=cache extras=${cachedExtras ? "cache" : "ai"}`);
     } else {
-      // Partial or full cache miss — generate missing days (EXTRAS runs in parallel)
+      // Partial or full cache miss — generate each missing day in parallel (EXTRAS also runs in parallel)
       const missing = pairingDays - cachedDays.length;
-      const maxDayTokens = Math.min(2200 * missing, 7500);
-
       const missingData = { ...data, pairing_days: missing };
       const missingCtx = buildContext(missingData, lang, missing);
       console.log(`[calorie-debug] gender=${missingData.gender} weight=${missingData.weight} dob=${missingData.dob} age=${missingData.age} → maintenanceTarget=${missingCtx.maintenanceTarget} calorieTarget=${missingCtx.calorieTarget} gainTarget=${missingCtx.gainTarget} cacheKey.calorieTargetKey=${buildCacheKey(missingData, missingCtx, lang).calorieTargetKey}`);
-      const daysResult = await runStructured(
-        buildAllDaysPrompt(missingData, missing, missingCtx),
-        DAYS_SCHEMA, maxDayTokens, FAST_MODEL
+
+      const generateOneDay = (dayIndex) => {
+        const overallDayNum = cachedDays.length + dayIndex + 1;
+        return runStructured(
+          buildAllDaysPrompt(missingData, 1, missingCtx, overallDayNum),
+          DAYS_SCHEMA, 2200, FAST_MODEL
+        );
+      };
+
+      const dayResults = await Promise.all(
+        Array.from({ length: missing }, async (_, i) => {
+          try {
+            return await generateOneDay(i);
+          } catch (e) {
+            console.warn(`[generate-plan] Day ${cachedDays.length + i + 1} attempt 1 failed: ${e.message} — retrying`);
+            try {
+              return await generateOneDay(i);
+            } catch (e2) {
+              console.error(`[generate-plan] Day ${cachedDays.length + i + 1} failed after retry: ${e2.message}`);
+              return null;
+            }
+          }
+        })
       );
 
-      const aiDays = daysResult.days.map(d => ({
-        meals: d.meals,
-        totalCalories: d.meals.reduce((s, m) => s + m.calories, 0),
-        label: d.label,
-        jetlagNote: d.jetlagNote,
-      }));
+      if (dayResults.every(r => r === null)) {
+        throw Object.assign(new Error("Failed to generate meal plan after retries"), { status: 503 });
+      }
 
-      const stored = await storeCachedDays(aiDays, cacheKey);
+      const aiDays = dayResults.map(r => r ? {
+        meals: r.days[0].meals,
+        totalCalories: r.days[0].meals.reduce((s, m) => s + m.calories, 0),
+        label: r.days[0].label,
+        jetlagNote: r.days[0].jetlagNote,
+      } : null);
+
+      const successfulAiDays = aiDays.filter(d => d !== null);
+      const stored = successfulAiDays.length > 0
+        ? await storeCachedDays(successfulAiDays, cacheKey)
+        : { ids: [] };
       newDayIds = stored.ids || [];
 
       const allDays = [
@@ -1238,12 +1281,14 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       ];
       days = allDays.slice(0, pairingDays).map((d, i) => ({
         day: i + 1,
-        label: d.label || `Day ${i + 1}`,
-        jetlagNote: d.jetlagNote ?? null,
-        meals: d.meals,
-        totalCalories: d.totalCalories,
+        label: d?.label || `Day ${i + 1}`,
+        jetlagNote: d?.jetlagNote ?? null,
+        meals: d?.meals || null,
+        totalCalories: d?.totalCalories || null,
+        failed: d === null,
       }));
-      console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s) extras=${cachedExtras ? "cache" : "ai"}`);
+      const failedCount = aiDays.filter(d => d === null).length;
+      console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${failedCount} failed extras=${cachedExtras ? "cache" : "ai"}`);
     }
 
     const extras = await extrasPromise;
@@ -1252,6 +1297,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     markDaysSeen(email, [...cachedDayIds, ...newDayIds]);
     incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
 
+    const failedDays = days.filter(d => d.failed).map(d => d.day);
     const planResponse = {
       summary: extras.summary,
       days,
@@ -1260,6 +1306,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       performanceAdvisory: getCognitivePerfRules(data),
       pairingCount: usage.pairingCount + 1,
       isPremium: usage.isPremium,
+      ...(failedDays.length ? { failedDays } : {}),
     };
 
     // Only the roster-automation flow can deep-link the email back to the plan
@@ -1288,12 +1335,21 @@ app.post("/api/estimate-calories", async (req, res) => {
       return res.status(400).json({ error: "'prompt' is invalid or too long" });
     }
 
-    const message = await client.messages.create({
-      model: FAST_MODEL,
-      max_tokens: 1024,
-      output_config: { format: { type: "json_schema", schema: CALORIE_SCHEMA } },
-      messages: [{ role: "user", content: prompt }],
-    });
+    let calorieTimerId;
+    const message = await Promise.race([
+      client.messages.create({
+        model: FAST_MODEL,
+        max_tokens: 1024,
+        output_config: { format: { type: "json_schema", schema: CALORIE_SCHEMA } },
+        messages: [{ role: "user", content: prompt }],
+      }),
+      new Promise((_, rej) => {
+        calorieTimerId = setTimeout(
+          () => rej(Object.assign(new Error("Request timed out"), { status: 504 })),
+          30000
+        );
+      }),
+    ]).finally(() => clearTimeout(calorieTimerId));
 
     if (message.stop_reason === "refusal") {
       return res.status(502).json({ error: "The model declined to estimate calories." });
@@ -1313,12 +1369,21 @@ app.post("/api/check-airplane-meal", async (req, res) => {
       return res.status(400).json({ error: "'prompt' is invalid or too long" });
     }
 
-    const message = await client.messages.create({
-      model: FAST_MODEL,
-      max_tokens: 1024,
-      output_config: { format: { type: "json_schema", schema: AIRPLANE_MEAL_SCHEMA } },
-      messages: [{ role: "user", content: prompt }],
-    });
+    let mealTimerId;
+    const message = await Promise.race([
+      client.messages.create({
+        model: FAST_MODEL,
+        max_tokens: 1024,
+        output_config: { format: { type: "json_schema", schema: AIRPLANE_MEAL_SCHEMA } },
+        messages: [{ role: "user", content: prompt }],
+      }),
+      new Promise((_, rej) => {
+        mealTimerId = setTimeout(
+          () => rej(Object.assign(new Error("Request timed out"), { status: 504 })),
+          30000
+        );
+      }),
+    ]).finally(() => clearTimeout(mealTimerId));
 
     if (message.stop_reason === "refusal") {
       return res.status(502).json({ error: "The model declined to check this meal." });
