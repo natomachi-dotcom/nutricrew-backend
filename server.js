@@ -222,9 +222,10 @@ const DAY_SCHEMA = {
   properties: {
     label: { type: "string" },
     jetlagNote: { type: ["string", "null"] },
+    hydrationNote: { type: ["string", "null"] },
     meals: { type: "array", items: MEAL_SCHEMA },
   },
-  required: ["label", "jetlagNote", "meals"],
+  required: ["label", "jetlagNote", "hydrationNote", "meals"],
   additionalProperties: false,
 };
 
@@ -687,6 +688,30 @@ function getCognitivePerfRules(data) {
     : null;
 }
 
+// Computes a per-day water target scaled to flight distance and duty length.
+// Cabin altitude (~8,000 ft) depressurises cabin air to ~15 % humidity — crew
+// lose roughly 1.5× the water of a ground day per flight hour.
+function computeHydration(data) {
+  const tzAbs = Math.abs(parseInt(data.timezone || 0, 10));
+  const dutyHours = parseInt(data.duty_hours || 0, 10);
+
+  // Base 2.5 L — already above ground-day norms to account for baseline crew activity
+  let liters = 2.5;
+  let category;
+
+  if (tzAbs >= 7) { liters += 0.75; category = "ultra-long-haul"; }
+  else if (tzAbs >= 5) { liters += 0.5; category = "long-haul"; }
+  else if (tzAbs >= 3) { liters += 0.25; category = "medium-haul"; }
+  else { category = "domestic"; }
+
+  if (dutyHours >= 12) liters += 0.25;
+
+  return {
+    dailyTargetLiters: Math.min(parseFloat(liters.toFixed(2)), 4.0),
+    category,
+  };
+}
+
 // Builds the shared crew-profile context used by every prompt for a plan.
 function buildContext(data, lang, pairingDays) {
   const langName = lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English";
@@ -760,6 +785,7 @@ function buildContext(data, lang, pairingDays) {
 }
 
 function buildAllDaysPrompt(data, pairingDays, ctx, startDayNum = 1) {
+  const hydration = computeHydration(data);
   const daySpecs = Array.from({ length: pairingDays }, (_, i) => {
     const dayNum = startDayNum + i;
     const loc = ctx.destinations[startDayNum - 1 + i] || data.departure;
@@ -769,8 +795,9 @@ function buildAllDaysPrompt(data, pairingDays, ctx, startDayNum = 1) {
     const budgetLine = ctx.hasBudget
       ? `Budget: ~$${ctx.perDayBudget.toFixed(2)} USD for today's ingredients near ${loc}.`
       : "";
-    return `Day ${dayNum} — Location: ${loc}. ${budgetLine} ${jetlagInstr}`;
+    return `Day ${dayNum} — Location: ${loc}. ${budgetLine} ${jetlagInstr} hydrationNote: one crew-specific hydration sentence for this day at ${loc} (flight day vs. layover, time of duty) — practical, no numbers, ≤12 words. Never say "stay hydrated".`;
   }).join("\n");
+  const hydrationBlock = `\nHYDRATION CONTEXT (${hydration.dailyTargetLiters}L/day target — ${hydration.category}): Cabin pressure at altitude drops humidity to ~15%. Write each day's "hydrationNote" as a brief, crew-tailored tip specific to that day's context (in-flight, transit, layover). Example: "Pack an extra bottle — you're at altitude today." or "Layover day: sip steadily and add electrolytes if it's warm.".\n`;
 
   const carriedFoodBlock = buildCarriedFoodPromptBlock(ctx.restrictedBorders);
 
@@ -818,7 +845,8 @@ MAINTENANCE CALORIE GOAL (HARD REQUIREMENT — this is NOT a diet plan):
     Total:     ~${ctx.maintenanceTarget} kcal
 - Use full-sized portions. Add calorie-dense ingredients where needed: olive oil, avocado, nuts, cheese, whole grains, legumes, nut butter, Greek yogurt.
 - VERIFY: sum all 5 meal "calories" values. If total < ${ctx.maintenanceTarget - 100} kcal, increase portion sizes before finalizing.` : ""}
-${ctx.cognitivePerfRules ? `\n${ctx.cognitivePerfRules}` : ""}`;
+${ctx.cognitivePerfRules ? `\n${ctx.cognitivePerfRules}` : ""}
+${hydrationBlock}`;
 }
 
 function getDestinationFoodRules(destinations) {
@@ -1430,6 +1458,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         groceryList: entry.groceryList,
         foodRestrictions: entry.foodRestrictions,
         performanceAdvisory: getCognitivePerfRules(data),
+        hydration: computeHydration(data),
         pairingCount: usage.pairingCount + 1,
         isPremium: usage.isPremium,
       });
@@ -1577,6 +1606,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       groceryList: extras.groceryList,
       foodRestrictions: extras.foodRestrictions,
       performanceAdvisory: getCognitivePerfRules(data),
+      hydration: computeHydration(data),
       pairingCount: usage.pairingCount + 1,
       isPremium: usage.isPremium,
       ...(failedDays.length ? { failedDays } : {}),
