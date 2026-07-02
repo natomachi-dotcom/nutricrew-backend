@@ -457,6 +457,26 @@ async function runStructured(prompt, schema, maxTokens, model = FAST_MODEL) {
   return extractJSON(message);
 }
 
+// If the model returns meals whose calorie sum is outside target ± tolerance,
+// proportionally rescale calories and macros on every meal so the total lands on
+// target. This is a deterministic safety net — it never calls the model again.
+function rescaleMealsToTarget(meals, target, toleranceFraction = 0.15) {
+  const actual = meals.reduce((s, m) => s + (m.calories || 0), 0);
+  if (!actual || !target) return { meals, totalCalories: actual };
+  const ratio = target / actual;
+  if (Math.abs(ratio - 1) <= toleranceFraction) return { meals, totalCalories: actual };
+  const rescaled = meals.map(m => ({
+    ...m,
+    calories: Math.round((m.calories || 0) * ratio),
+    protein: Math.round((m.protein || 0) * ratio),
+    carbs: Math.round((m.carbs || 0) * ratio),
+    fat: Math.round((m.fat || 0) * ratio),
+  }));
+  const newTotal = rescaled.reduce((s, m) => s + m.calories, 0);
+  console.log(`[calorie-guard] meals rescaled: actual=${actual} target=${target} ratio=${ratio.toFixed(3)} → ${newTotal} kcal`);
+  return { meals: rescaled, totalCalories: newTotal };
+}
+
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
 // Uses actual age if provided, defaults to 35. Height defaults to 170 cm.
 function estimateTDEE(data) {
@@ -1320,12 +1340,19 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         throw Object.assign(new Error("Failed to generate meal plan after retries"), { status: 503 });
       }
 
-      const aiDays = dayResults.map(r => r ? {
-        meals: r.days[0].meals,
-        totalCalories: r.days[0].meals.reduce((s, m) => s + m.calories, 0),
-        label: r.days[0].label,
-        jetlagNote: r.days[0].jetlagNote,
-      } : null);
+      // Server-side calorie guard: if the model's meal sum drifts outside the
+      // target ± 15 % we proportionally rescale all macros so the total is
+      // guaranteed to land within the band, without an extra AI call.
+      const guardTarget = missingCtx.calorieTarget ?? missingCtx.gainTarget ?? missingCtx.maintenanceTarget;
+      const guardTolerance = missingCtx.maintenanceTarget ? 0.15 : 0.10;
+      const aiDays = dayResults.map(r => {
+        if (!r) return null;
+        const raw = r.days[0];
+        const { meals, totalCalories } = guardTarget
+          ? rescaleMealsToTarget(raw.meals, guardTarget, guardTolerance)
+          : { meals: raw.meals, totalCalories: raw.meals.reduce((s, m) => s + m.calories, 0) };
+        return { meals, totalCalories, label: raw.label, jetlagNote: raw.jetlagNote };
+      });
 
       const successfulAiDays = aiDays.filter(d => d !== null);
       const stored = successfulAiDays.length > 0
