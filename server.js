@@ -1262,6 +1262,42 @@ app.post("/api/auth/verify-session", async (req, res) => {
   }
 });
 
+// ─── REFERRAL ─────────────────────────────────────────────────────────────────
+
+app.get("/api/referral/code", async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ error: "email is required" });
+    const r = await fetch(`${CRUD_API_BASE}/api/referral/code?email=${encodeURIComponent(email)}`, {
+      headers: { "x-internal-key": INTERNAL_API_KEY },
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
+    res.json(data);
+  } catch (err) {
+    console.error("referral/code error:", err.message);
+    res.status(500).json({ error: "Failed to get referral code." });
+  }
+});
+
+app.post("/api/referral/use", async (req, res) => {
+  try {
+    const { email, referralCode } = req.body;
+    if (!email || !referralCode) return res.status(400).json({ error: "email and referralCode are required" });
+    const r = await fetch(`${CRUD_API_BASE}/api/referral/use`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+      body: JSON.stringify({ email, referralCode }),
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
+    res.json(data);
+  } catch (err) {
+    console.error("referral/use error:", err.message);
+    res.status(500).json({ error: "Failed to apply referral code." });
+  }
+});
+
 // ─── PLAN GENERATION ──────────────────────────────────────────────────────────
 
 // ── MEAL CACHE HELPERS ────────────────────────────────────────────
