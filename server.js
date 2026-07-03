@@ -533,7 +533,8 @@ const KITCHEN_ACCESS_RULES = {
 };
 
 function buildKitchenAccessBlock(kitchen) {
-  const list = (kitchen && kitchen.length) ? kitchen : ["full_kitchen"];
+  const normalized = Array.isArray(kitchen) ? kitchen : (kitchen ? [kitchen] : []);
+  const list = normalized.length ? normalized : ["full_kitchen"];
   const rules = list.map((k) => KITCHEN_ACCESS_RULES[k]).filter(Boolean);
   if (!rules.length) return "";
 
@@ -1519,9 +1520,12 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       const generateOneDay = (dayIndex) => {
         const overallDayNum = cachedDays.length + dayIndex + 1;
         // Use per-day kitchen if provided; fall back to the shared kitchen setting.
-        const dayKitchen = Array.isArray(missingData.kitchen_by_day)
+        // Always coerce to array: kitchen_by_day[i] might be a string if the
+        // client serialized a single-element array as a scalar.
+        const rawKitchen = Array.isArray(missingData.kitchen_by_day)
           ? (missingData.kitchen_by_day[overallDayNum - 1] || missingData.kitchen || [])
           : (missingData.kitchen || []);
+        const dayKitchen = Array.isArray(rawKitchen) ? rawKitchen : (rawKitchen ? [rawKitchen] : []);
         const dayData = { ...missingData, kitchen: dayKitchen };
         const dayCtx = buildContext(dayData, lang, 1);
         // 3200 tokens: multi-country customs tips can be verbose; 2200 caused
