@@ -1576,15 +1576,22 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         ...cachedDays.map(d => ({ meals: d.meals, totalCalories: d.totalCalories, label: null, jetlagNote: null, hydrationNote: null })),
         ...aiDays,
       ];
-      days = allDays.slice(0, pairingDays).map((d, i) => ({
-        day: i + 1,
-        label: d?.label || `Day ${i + 1}`,
-        jetlagNote: d?.jetlagNote ?? null,
-        hydrationNote: d?.hydrationNote ?? null,
-        meals: d?.meals || null,
-        totalCalories: d?.totalCalories || null,
-        failed: d === null,
-      }));
+      days = allDays.slice(0, pairingDays).map((d, i) => {
+        const dayNum = i + 1;
+        // Model generates each day individually (pairingDays=1 per call) so it
+        // always labels itself "Day 1 — ...". Correct the prefix to match position.
+        const rawLabel = d?.label || `Day ${dayNum}`;
+        const label = rawLabel.replace(/^Day\s+\d+/i, `Day ${dayNum}`);
+        return {
+          day: dayNum,
+          label,
+          jetlagNote: d?.jetlagNote || null,   // || catches empty string from model
+          hydrationNote: d?.hydrationNote || null,
+          meals: d?.meals || null,
+          totalCalories: d?.totalCalories || null,
+          failed: d === null,
+        };
+      });
       const failedCount = aiDays.filter(d => d === null).length;
       console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${failedCount} failed extras=${cachedExtras ? "cache" : "ai"}`);
     }
