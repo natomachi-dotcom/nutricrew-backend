@@ -1518,10 +1518,16 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
       const generateOneDay = (dayIndex) => {
         const overallDayNum = cachedDays.length + dayIndex + 1;
+        // Use per-day kitchen if provided; fall back to the shared kitchen setting.
+        const dayKitchen = Array.isArray(missingData.kitchen_by_day)
+          ? (missingData.kitchen_by_day[overallDayNum - 1] || missingData.kitchen || [])
+          : (missingData.kitchen || []);
+        const dayData = { ...missingData, kitchen: dayKitchen };
+        const dayCtx = buildContext(dayData, lang, 1);
         // 3200 tokens: multi-country customs tips can be verbose; 2200 caused
         // the API to return a minimal 1-meal response when the output hit the cap.
         return runStructured(
-          buildAllDaysPrompt(missingData, 1, missingCtx, overallDayNum),
+          buildAllDaysPrompt(dayData, 1, dayCtx, overallDayNum),
           DAYS_SCHEMA, 3200, FAST_MODEL
         ).then(r => {
           const meals = r?.days?.[0]?.meals;
