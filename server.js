@@ -1336,7 +1336,11 @@ function buildCacheKey(data, ctx, lang) {
   const goals = (data.goals || []).slice().sort();
   const perDay = ctx.perDayBudget;
   const budgetLevel = !perDay ? "none" : perDay > 50 ? "high" : perDay > 20 ? "medium" : "low";
-  const kitchen = (data.kitchen || []).slice().sort();
+  // For multi-day plans each day may have a different kitchen; include all of
+  // them in the key so mixed kitchens never collide in cache.
+  const kitchen = Array.isArray(data.kitchen_by_day) && data.kitchen_by_day.length > 0
+    ? data.kitchen_by_day.map(k => (Array.isArray(k) ? k.slice().sort() : (k ? [k] : [])).join("+") || "full_kitchen").join("|")
+    : (data.kitchen || []).slice().sort().join(",") || "full_kitchen";
   const ct = ctx.calorieTarget
     ? String(Math.round(ctx.calorieTarget / 100) * 100)
     : ctx.gainTarget
@@ -1348,7 +1352,7 @@ function buildCacheKey(data, ctx, lang) {
     dietKey: diets.join(",") || "none",
     goalKey: goals.join(",") || "none",
     budgetLevel,
-    kitchenKey: kitchen.join(",") || "full_kitchen",
+    kitchenKey: kitchen,
     calorieTargetKey: ct,
     cookingKey: data.cooking_pref || "none",
     lang: lang || "en",
