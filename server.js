@@ -1504,6 +1504,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         day: i + 1,
         label: `Day ${i + 1}`,
         jetlagNote: null,
+        hydrationNote: null,
         meals: d.meals,
         totalCalories: d.totalCalories,
       }));
@@ -1562,7 +1563,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         const { meals, totalCalories } = guardTarget
           ? rescaleMealsToTarget(raw.meals, guardTarget, guardTolerance)
           : { meals: raw.meals, totalCalories: raw.meals.reduce((s, m) => s + m.calories, 0) };
-        return { meals, totalCalories, label: raw.label, jetlagNote: raw.jetlagNote };
+        return { meals, totalCalories, label: raw.label, jetlagNote: raw.jetlagNote, hydrationNote: raw.hydrationNote ?? null };
       });
 
       const successfulAiDays = aiDays.filter(d => d !== null);
@@ -1572,13 +1573,14 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       newDayIds = stored.ids || [];
 
       const allDays = [
-        ...cachedDays.map(d => ({ meals: d.meals, totalCalories: d.totalCalories, label: null, jetlagNote: null })),
+        ...cachedDays.map(d => ({ meals: d.meals, totalCalories: d.totalCalories, label: null, jetlagNote: null, hydrationNote: null })),
         ...aiDays,
       ];
       days = allDays.slice(0, pairingDays).map((d, i) => ({
         day: i + 1,
         label: d?.label || `Day ${i + 1}`,
         jetlagNote: d?.jetlagNote ?? null,
+        hydrationNote: d?.hydrationNote ?? null,
         meals: d?.meals || null,
         totalCalories: d?.totalCalories || null,
         failed: d === null,
