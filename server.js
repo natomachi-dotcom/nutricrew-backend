@@ -71,12 +71,31 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  // A subscription counts as premium during its trial and during Stripe's
+  // dunning retry window after a failed renewal charge ("past_due") — access
+  // is only actually revoked on customer.subscription.deleted, once Stripe
+  // gives up retrying. This avoids locking someone out on the first missed
+  // payment; see invoice.payment_failed below.
+  const PREMIUM_STATUSES = ["active", "trialing", "past_due"];
+
   try {
+    // All handlers below only ever $set fields (never increment/append), so
+    // Stripe redelivering the same event is naturally idempotent — no extra
+    // dedup bookkeeping needed.
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
       const email = session.customer_email || session.metadata?.email;
       console.log(`[webhook] checkout.session.completed id=${event.id} email=${email} customer=${session.customer}`);
       if (email) {
+        let trialEnd = null;
+        if (session.subscription) {
+          try {
+            const subscription = await stripe.subscriptions.retrieve(session.subscription);
+            trialEnd = subscription.trial_end || null;
+          } catch (e) {
+            console.error(`[webhook] could not retrieve subscription ${session.subscription}:`, e.message);
+          }
+        }
         const r = await fetch(`${CRUD_API_BASE}/api/set-premium`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
@@ -84,6 +103,7 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
             email,
             stripeCustomerId: session.customer || null,
             stripeSubscriptionId: session.subscription || null,
+            trialEnd,
           }),
         });
         if (!r.ok) {
@@ -91,7 +111,7 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
           console.error(`[webhook] set-premium failed: ${r.status} ${body}`);
           return res.status(500).json({ error: "Failed to update user premium status" });
         }
-        console.log(`[webhook] set-premium ok for ${email}`);
+        console.log(`[webhook] set-premium ok for ${email} trialEnd=${trialEnd}`);
       }
     } else if (event.type === "customer.subscription.deleted") {
       const subscription = event.data.object;
@@ -99,7 +119,7 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
       const r = await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
-        body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium: false }),
+        body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium: false, trialEnd: null }),
       });
       if (!r.ok) {
         console.error(`[webhook] set-premium-by-customer failed: ${r.status}`);
@@ -107,17 +127,32 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
       }
     } else if (event.type === "customer.subscription.updated") {
       const subscription = event.data.object;
-      const isPremium = ["active", "trialing"].includes(subscription.status);
-      console.log(`[webhook] subscription.updated customer=${subscription.customer} status=${subscription.status} isPremium=${isPremium}`);
+      const isPremium = PREMIUM_STATUSES.includes(subscription.status);
+      console.log(`[webhook] subscription.updated customer=${subscription.customer} status=${subscription.status} isPremium=${isPremium} trialEnd=${subscription.trial_end}`);
       const r = await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
-        body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium }),
+        body: JSON.stringify({ stripeCustomerId: subscription.customer, isPremium, trialEnd: subscription.trial_end || null }),
       });
       if (!r.ok) {
         console.error(`[webhook] set-premium-by-customer failed: ${r.status}`);
         return res.status(500).json({ error: "Failed to update user premium status" });
       }
+    } else if (event.type === "invoice.paid") {
+      const invoice = event.data.object;
+      console.log(`[webhook] invoice.paid customer=${invoice.customer} subscription=${invoice.subscription} amount=${invoice.amount_paid}`);
+      // Confirms the trial converted (or a renewal succeeded) — the subscription's
+      // own status ("active") is the source of truth for isPremium, already kept
+      // in sync by customer.subscription.updated. Nothing further to do here
+      // beyond logging for observability.
+    } else if (event.type === "invoice.payment_failed") {
+      const invoice = event.data.object;
+      console.log(`[webhook] invoice.payment_failed customer=${invoice.customer} subscription=${invoice.subscription} attempt=${invoice.attempt_count}`);
+      // Don't revoke access here — Stripe moves the subscription to "past_due"
+      // and retries per its dunning schedule; customer.subscription.updated
+      // already keeps isPremium=true through that window (see PREMIUM_STATUSES
+      // above). Access is only actually revoked once Stripe gives up and fires
+      // customer.subscription.deleted.
     }
   } catch (err) {
     console.error("Stripe webhook handling failed:", err.message);
@@ -141,9 +176,23 @@ const FROM_EMAIL = process.env.FROM_EMAIL || "NutriCrew <crewmealplans@nutricrew
 
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://nutricrew.ca";
+// Free trial length before the first real charge — change this one constant to adjust it.
+const TRIAL_DAYS = 30;
 
 const CRUD_API_BASE = process.env.CRUD_API_BASE;
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
+
+// Looks up whether this email already has a Stripe customer on file — used to
+// decide trial eligibility (see /api/create-checkout-session) so the same
+// account can't restart the free trial by re-checking out.
+async function getExistingStripeCustomerId(email) {
+  const r = await fetch(`${CRUD_API_BASE}/api/user/stripe-customer?email=${encodeURIComponent(email)}`, {
+    headers: { "x-internal-key": INTERNAL_API_KEY },
+  });
+  if (!r.ok) return null;
+  const data = await r.json().catch(() => ({}));
+  return data.stripeCustomerId || null;
+}
 
 // Mirrors the frontend's 1-5 day picker — caps the number of parallel
 // per-day Sonnet calls a single request can trigger.
@@ -2689,18 +2738,36 @@ app.post("/api/roster/mark-plan-viewed", apiLimiter, async (req, res) => {
 app.post("/api/create-checkout-session", async (req, res) => {
   try {
     const { email, plan } = req.body;
-    if (!email || !EMAIL_REGEX.test((email || "").toLowerCase().trim())) {
+    const normalizedEmail = (email || "").toLowerCase().trim();
+    if (!email || !EMAIL_REGEX.test(normalizedEmail)) {
       return res.status(400).json({ error: "Missing or invalid email" });
     }
     if (!stripe) {
       return res.status(503).json({ error: "Payments not configured" });
     }
     const isAnnual = plan === "annual";
+
+    // Trial abuse guard: an email that already has a Stripe customer on file
+    // has been through checkout before (trial or paid) — reuse that customer
+    // and skip trial_period_days so they can't restart the free trial by
+    // simply upgrading again. Same-card-different-email abuse is handled by
+    // Stripe Radar's built-in "block if card used for a trial before" rule
+    // (configured in the Stripe dashboard, not here).
+    const existingCustomerId = await getExistingStripeCustomerId(normalizedEmail);
+    const isReturningCustomer = !!existingCustomerId;
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "subscription",
-      customer_email: email.toLowerCase().trim(),
-      metadata: { email: email.toLowerCase().trim() },
+      payment_method_collection: "always", // card required up front, even during a trial
+      ...(isReturningCustomer
+        ? { customer: existingCustomerId }
+        : { customer_email: normalizedEmail }),
+      metadata: { email: normalizedEmail },
+      subscription_data: {
+        metadata: { email: normalizedEmail },
+        ...(isReturningCustomer ? {} : { trial_period_days: TRIAL_DAYS }),
+      },
       line_items: [{
         price_data: {
           currency: "usd",
@@ -2720,6 +2787,34 @@ app.post("/api/create-checkout-session", async (req, res) => {
   } catch (err) {
     console.error("Stripe checkout error:", err.message);
     res.status(500).json({ error: "Could not create checkout session." });
+  }
+});
+
+// Redirects an existing subscriber to Stripe's hosted billing portal so they
+// can update payment methods, view invoices, or cancel — self-service, no
+// custom cancellation UI to build or dispute-prone dark patterns to avoid.
+app.post("/api/create-portal-session", async (req, res) => {
+  try {
+    const { email } = req.body;
+    const normalizedEmail = (email || "").toLowerCase().trim();
+    if (!email || !EMAIL_REGEX.test(normalizedEmail)) {
+      return res.status(400).json({ error: "Missing or invalid email" });
+    }
+    if (!stripe) {
+      return res.status(503).json({ error: "Payments not configured" });
+    }
+    const customerId = await getExistingStripeCustomerId(normalizedEmail);
+    if (!customerId) {
+      return res.status(404).json({ error: "No subscription found for this account." });
+    }
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: FRONTEND_URL,
+    });
+    res.json({ url: portalSession.url });
+  } catch (err) {
+    console.error("Stripe portal session error:", err.message);
+    res.status(500).json({ error: "Could not open billing portal." });
   }
 });
 
