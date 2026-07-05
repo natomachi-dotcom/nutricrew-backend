@@ -7,7 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Resend } from "resend";
 import Stripe from "stripe";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { createHash, randomBytes } from "crypto";
+import { createHash } from "crypto";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -1233,7 +1233,7 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
 
     // Email already verified — return a fresh session token directly, no code needed.
     if (storeData.alreadyVerified) {
-      return res.json({ alreadyVerified: true, token: storeData.token, email: storeData.email, name: storeData.name, isPremium: storeData.isPremium, pairingCount: storeData.pairingCount, hasPassword: storeData.hasPassword });
+      return res.json({ alreadyVerified: true, token: storeData.token, email: storeData.email, name: storeData.name, isPremium: storeData.isPremium, pairingCount: storeData.pairingCount, hasPassword: storeData.hasPassword, ...toFrontendProfileFields(storeData) });
     }
 
     if (process.env.RESEND_API_KEY) {
@@ -1337,6 +1337,56 @@ app.post("/api/auth/verify-session", async (req, res) => {
   } catch (err) {
     console.error("verify-session error:", err.message);
     res.status(500).json({ error: "Session check failed." });
+  }
+});
+
+// Persists durable profile preferences (currently: budget) to the user's
+// server-side record, so they survive a cleared cache or a new device —
+// not just localStorage on whichever browser set them.
+// Frontend uses snake_case (matches the pairing/check-in object shape);
+// the CRUD API's User schema uses camelCase. This is the single mapping
+// between the two — reused for both saving and reading these fields back.
+const PROFILE_FIELD_MAP = {
+  gender: "gender", weight: "weight", dob: "dob", position: "position",
+  lunch_bag: "lunchBag", cooking_pref: "cookingPref",
+  diets: "diets", diet_other: "dietOther", goals: "goals",
+  calorie_target: "calorieTarget", calorie_deficit_amount: "calorieDeficitAmount",
+  calorie_deficit_preset: "calorieDeficitPreset", departure: "departure",
+  budget_type: "budgetType", budget_amount: "budgetAmount",
+};
+function toCrudProfileFields(snakeCaseFields) {
+  const out = {};
+  for (const [snake, camel] of Object.entries(PROFILE_FIELD_MAP)) {
+    if (snakeCaseFields[snake] !== undefined) out[camel] = snakeCaseFields[snake];
+  }
+  return out;
+}
+function toFrontendProfileFields(camelCaseFields) {
+  const reverse = Object.fromEntries(Object.entries(PROFILE_FIELD_MAP).map(([s, c]) => [c, s]));
+  const out = {};
+  for (const [camel, val] of Object.entries(camelCaseFields || {})) {
+    if (reverse[camel]) out[reverse[camel]] = val;
+  }
+  return out;
+}
+
+app.post("/api/profile/update", async (req, res) => {
+  try {
+    const { email, ...fields } = req.body;
+    if (!email || !EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: "Valid email is required." });
+    }
+    const updateRes = await fetch(`${CRUD_API_BASE}/api/profile/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+      body: JSON.stringify({ email: email.toLowerCase().trim(), ...toCrudProfileFields(fields) }),
+    });
+    const data = await updateRes.json();
+    if (!updateRes.ok) return res.status(updateRes.status).json(data);
+    res.json(toFrontendProfileFields(data));
+  } catch (err) {
+    console.error("profile/update error:", err.message);
+    res.status(500).json({ error: "Could not save profile. Please try again." });
   }
 });
 
@@ -2347,7 +2397,7 @@ TRG TRN SIM GRD GTC OE = Training
 // Parse roster image(s) with Haiku vision
 app.post("/api/roster/parse", apiLimiter, async (req, res) => {
   try {
-    const { images, homeBase, lang, email } = req.body;
+    const { images, homeBase, email } = req.body;
     if (!Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: "Missing images array" });
     }
@@ -2414,7 +2464,7 @@ app.post("/api/roster/send-reminder", async (req, res) => {
   if (key !== INTERNAL_API_KEY) return res.status(401).json({ error: "Unauthorized" });
 
   try {
-    const { email, name, pairingDate, destinations, departure, pairingDays, confirmToken, lang } = req.body;
+    const { email, name, pairingDate, destinations, confirmToken } = req.body;
     if (!email || !confirmToken) return res.status(400).json({ error: "Missing required fields" });
 
     const dest = Array.isArray(destinations) ? destinations.join(" → ") : destinations;
@@ -2573,7 +2623,7 @@ const GYM_PLAN_SCHEMA = {
 
 app.post("/api/gym-plan/generate", apiLimiter, async (req, res) => {
   try {
-    const { email, pairings, profile, lang } = req.body;
+    const { email, pairings, profile } = req.body;
     if (!email || !Array.isArray(pairings) || pairings.length === 0) {
       return res.status(400).json({ error: "Missing required fields" });
     }
@@ -2936,7 +2986,7 @@ app.use((req, res) => {
 // Catches malformed JSON bodies and anything else that escapes a route's own
 // try/catch, so Express's default handler (which can include stack traces
 // when NODE_ENV isn't "production") never sends raw error details to clients.
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   if (err.type === "entity.parse.failed") {
     return res.status(400).json({ error: "Invalid JSON in request body" });
   }
