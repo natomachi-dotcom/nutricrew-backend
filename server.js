@@ -1340,6 +1340,53 @@ app.post("/api/auth/verify-session", async (req, res) => {
   }
 });
 
+// ─── CONTACT US ───────────────────────────────────────────────────────────────
+// Emails the submitted message to the support inbox via Resend, reply-to set
+// to the submitter so replying in the inbox goes straight back to them.
+const CONTACT_TO_EMAIL = "crewmealplans@nutricrew.ca";
+const MAX_CONTACT_MESSAGE_LENGTH = 4000;
+
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { name, email, message } = req.body;
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "Name is required." });
+    }
+    if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email.trim())) {
+      return res.status(400).json({ error: "A valid email is required." });
+    }
+    if (!message || typeof message !== "string" || !message.trim()) {
+      return res.status(400).json({ error: "Message is required." });
+    }
+    if (message.length > MAX_CONTACT_MESSAGE_LENGTH) {
+      return res.status(400).json({ error: "Message is too long." });
+    }
+    if (!process.env.RESEND_API_KEY) {
+      return res.status(503).json({ error: "Contact form is not configured." });
+    }
+
+    const safeName = name.trim().slice(0, 200);
+    const safeEmail = email.trim();
+    const safeMessage = message.trim();
+
+    const emailResult = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [CONTACT_TO_EMAIL],
+      reply_to: safeEmail,
+      subject: `NutriCrew contact form: ${safeName}`,
+      html: `<p><strong>From:</strong> ${safeName} (${safeEmail})</p><p style="white-space:pre-wrap">${safeMessage.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]))}</p>`,
+    });
+    if (emailResult.error) {
+      console.error("Contact form email error:", emailResult.error);
+      return res.status(502).json({ error: "Could not send your message. Please try again." });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error("contact error:", err.message);
+    res.status(500).json({ error: "Could not send your message. Please try again." });
+  }
+});
+
 // ─── REFERRAL ─────────────────────────────────────────────────────────────────
 
 app.get("/api/referral/code", async (req, res) => {
@@ -1515,6 +1562,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         hydration: computeHydration(data),
         pairingCount: usage.pairingCount + 1,
         isPremium: usage.isPremium,
+        hasPassword: usage.hasPassword,
       });
     }
 
@@ -1681,6 +1729,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       hydration: computeHydration(data),
       pairingCount: usage.pairingCount + 1,
       isPremium: usage.isPremium,
+      hasPassword: usage.hasPassword,
       ...(failedDays.length ? { failedDays } : {}),
     };
 
