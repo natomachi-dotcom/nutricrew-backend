@@ -2874,7 +2874,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
           recurring: { interval: isAnnual ? "year" : "month" },
           product_data: {
             name: isAnnual ? "NutriCrew Premium (Annual)" : "NutriCrew Premium (Monthly)",
-            description: "Unlimited meal plans, gym plans, roster automation, calorie deficit, jetlag meal plans & nearby stores/restaurants.",
+            description: "Unlimited meal plans, gym plans, roster automation, calorie deficit & jetlag meal plans.",
           },
         },
         quantity: 1,
@@ -2914,66 +2914,6 @@ app.post("/api/create-portal-session", async (req, res) => {
   } catch (err) {
     console.error("Stripe portal session error:", err.message);
     res.status(500).json({ error: "Could not open billing portal." });
-  }
-});
-
-// ─── NEARBY PLACES (premium only) ────────────────────────────────────────────
-
-async function fetchPlaces(query) {
-  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&key=${process.env.GOOGLE_PLACES_API_KEY}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Places API error: ${res.status}`);
-  const data = await res.json();
-  return (data.results || []).slice(0, 3).map(p => ({
-    name: p.name,
-    address: p.formatted_address,
-    rating: p.rating ?? null,
-    open_now: p.opening_hours?.open_now ?? null,
-  }));
-}
-
-app.post("/api/places", async (req, res) => {
-  try {
-    const { city, email } = req.body;
-    if (!city || typeof city !== "string" || city.length > 100) {
-      return res.status(400).json({ error: "Missing or invalid 'city'" });
-    }
-    if (!email || !EMAIL_REGEX.test((email || "").toLowerCase().trim())) {
-      return res.status(400).json({ error: "Missing or invalid 'email'" });
-    }
-    if (!process.env.GOOGLE_PLACES_API_KEY) {
-      return res.status(503).json({ error: "Places not configured" });
-    }
-
-    // Verify the user is premium before calling Places API.
-    const usage = await checkPairingUsage(email.toLowerCase().trim(), "");
-    if (!usage.isPremium) {
-      return res.status(403).json({ error: "premium_required" });
-    }
-
-    // Same destination gets looked up by every crew member who flies it —
-    // cache by city so repeat tab-opens (including re-opening the Nearby tab
-    // in the same session) don't re-bill two Google Places calls each time.
-    const cityKey = city.toLowerCase().trim();
-    const cached = await crudInternal("/api/places-cache/query", { cityKey }).catch(() => ({ hit: false }));
-
-    if (cached.hit) {
-      return res.json({ groceries: cached.groceries, restaurants: cached.restaurants });
-    }
-
-    const [groceries, restaurants] = await Promise.all([
-      fetchPlaces(`grocery store near ${city}`),
-      fetchPlaces(`healthy restaurant near ${city}`),
-    ]);
-
-    crudInternal("/api/places-cache/store", { cityKey, groceries, restaurants }).catch(e =>
-      console.error("places-cache/store failed:", e.message)
-    );
-
-    res.json({ groceries, restaurants });
-  } catch (err) {
-    console.error("Places error:", err.message);
-    res.status(502).json({ error: "Could not fetch nearby places." });
   }
 });
 
