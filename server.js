@@ -527,6 +527,122 @@ function rescaleMealsToTarget(meals, target, toleranceFraction = 0.15) {
   return { meals: rescaled, totalCalories: newTotal };
 }
 
+// ── ALLERGEN GUARD ──────────────────────────────────────────────────────
+// The model doesn't 100% reliably follow allergy instructions in the prompt
+// alone (observed live: nut-free plans still including peanut butter or
+// unlabeled granola). For genuine allergies/intolerances — as opposed to
+// broader lifestyle diets — a deterministic keyword check + one corrective
+// regeneration pass is a real guarantee, not just a request to the model.
+// Scoped to the 7 binary, well-defined allergens; FODMAP is excluded (a fuzzy
+// elimination diet with many portion-dependent exceptions, not a fixed
+// banned-ingredient list, and not typically life-threatening like the others).
+const ALLERGEN_RULES = {
+  nut_free: {
+    banned: /\b(peanuts?|peanut butter|almonds?|walnuts?|cashews?|pistachios?|pecans?|hazelnuts?|macadamia|brazil nuts?|pine nuts?|nutella|marzipan|praline|granola|trail mix|pesto)\b/i,
+    qualifier: /nut-free|nut free/i,
+  },
+  shellfish_free: {
+    banned: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|fish sauce|shrimp paste|surimi)\b/i,
+    qualifier: null, // no safe "shellfish-free oyster sauce" phrasing exists — always a hard ban
+  },
+  egg_free: {
+    banned: /\b(eggs?|mayonnaise|mayo|hollandaise|b[ée]arnaise|meringue|frittata|quiche|french toast)\b/i,
+    qualifier: /egg-free|egg free/i,
+  },
+  soy_free: {
+    banned: /\b(soy sauce|soybeans?|edamame|tofu|tempeh|soy milk|miso|soy lecithin)\b/i,
+    qualifier: /soy-free|soy free|coconut aminos|tamari/i,
+  },
+  gluten_free: {
+    banned: /\b(wheat|barley|rye|spelt|regular oats|regular (bread|pasta)|flour tortillas?|soy sauce)\b/i,
+    qualifier: /gluten-free|gluten free/i,
+  },
+  dairy_free: {
+    banned: /\b(milk|cheese|butter|cream|yogurt|whey)\b/i,
+    qualifier: /dairy-free|dairy free|coconut|oat milk|almond milk|plant-based|vegan/i,
+  },
+  lactose_free: {
+    banned: /\b(milk|cream|yogurt)\b/i,
+    qualifier: /lactose-free|lactose free|hard cheese|parmesan|cheddar|aged cheese/i,
+  },
+  sesame_free: {
+    banned: /\b(sesame|tahini|halva|za'?\s?atar|benne|gomashio|hummus|baba ganoush)\b/i,
+    qualifier: /sesame-free|sesame free|tahini-free|tahini free/i,
+  },
+};
+
+// Scans one meal's text for banned terms belonging to the crew member's
+// active allergen/intolerance selections. A banned term is only a violation
+// if the diet has no qualifier pattern, or the qualifier phrase isn't also
+// present somewhere in the same meal (e.g. "gluten-free tamari" is fine).
+function findMealAllergenViolations(meal, activeDiets) {
+  const text = [meal.name, meal.description, meal.tip, ...(meal.tags || [])].filter(Boolean).join(" ");
+  const violations = [];
+  for (const diet of activeDiets) {
+    const rule = ALLERGEN_RULES[diet];
+    if (!rule) continue;
+    const match = text.match(rule.banned);
+    if (!match) continue;
+    if (rule.qualifier && rule.qualifier.test(text)) continue;
+    violations.push({ diet, term: match[0] });
+  }
+  return violations;
+}
+
+// Asks the model to replace ONE meal that failed the allergen guard, naming
+// the exact banned term(s) found so the correction is targeted rather than a
+// generic "try again". Falls back to the original meal if this also fails.
+async function regenerateCompliantMeal(meal, violations, dietRules, kitchenAccessBlock) {
+  const prompt = `Revise this ONE meal — it violates a dietary restriction and must be replaced.
+
+ORIGINAL MEAL: ${JSON.stringify({ name: meal.name, description: meal.description })}
+VIOLATION: contains "${violations.map(v => v.term).join('", "')}", which is not allowed under this rule:
+
+${dietRules}
+
+${kitchenAccessBlock}
+
+Generate a REPLACEMENT ${meal.type} meal that fully complies with the rule above and the kitchen access constraints, keeping calories close to ${meal.calories} kcal. Return ONLY the meal JSON — no violating ingredient anywhere in the name, description, or tip.`;
+  try {
+    const replacement = await runStructured(prompt, MEAL_SCHEMA, 700, FAST_MODEL);
+    return { ...replacement, type: meal.type };
+  } catch (e) {
+    console.error(`[allergen-guard] regeneration failed for "${meal.name}": ${e.message}`);
+    return meal;
+  }
+}
+
+// Deterministic post-generation safety net: checks every meal in every day
+// against the crew member's allergen selections and regenerates (once) any
+// meal that violates one. Runs on bank hits and cache hits too, since those
+// may have been produced before this guard existed.
+async function applyAllergenGuard(days, data, ctx) {
+  const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
+  const activeDiets = rawDiets.filter(d => ALLERGEN_RULES[d]);
+  if (activeDiets.length === 0) return days;
+
+  let violationCount = 0;
+  const guardedDays = await Promise.all(days.map(async (day) => {
+    if (!day?.meals) return day;
+    const meals = await Promise.all(day.meals.map(async (meal) => {
+      const violations = findMealAllergenViolations(meal, activeDiets);
+      if (violations.length === 0) return meal;
+      violationCount++;
+      console.warn(`[allergen-guard] "${meal.name}" violates ${violations.map(v => `${v.diet}("${v.term}")`).join(", ")} — regenerating`);
+      const replacement = await regenerateCompliantMeal(meal, violations, ctx.dietRules, ctx.kitchenAccessBlock);
+      const stillViolating = findMealAllergenViolations(replacement, activeDiets);
+      if (stillViolating.length > 0) {
+        console.error(`[allergen-guard] "${replacement.name}" STILL violates ${stillViolating.map(v => v.diet).join(", ")} after regeneration — serving anyway, flag for review`);
+      }
+      return replacement;
+    }));
+    return { ...day, meals };
+  }));
+
+  if (violationCount > 0) console.log(`[allergen-guard] corrected ${violationCount} meal(s) across ${days.length} day(s)`);
+  return guardedDays;
+}
+
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
 // Uses actual age if provided, defaults to 35. Height defaults to 170 cm.
 function estimateTDEE(data) {
@@ -615,7 +731,7 @@ function getSingleDietBlock(diet, calorieTarget) {
 - Grocery "dairy" list: plant-based alternatives only (oat milk, coconut yogurt, vegan cheese) — no actual dairy.
 - If meal protein <15g, suggest a plant-protein fix in the "tip" field.`;
     case "gluten_free":
-      return `DIET: GLUTEN-FREE (celiac-level) — STRICT RULES:
+      return `DIET: GLUTEN-FREE / WHEAT ALLERGY (celiac-level, zero tolerance — wheat is one of the most common adult anaphylaxis triggers, not just a celiac concern):
 - NO wheat, barley, rye, spelt, regular oats, regular bread/pasta/flour tortillas/crackers/baked goods, soy sauce (use gluten-free tamari), or beer.
 - YES: rice, quinoa, corn, potatoes, GF-certified oats, buckwheat, millet, lentils, all proteins, all veg/fruit.
 - Always label packaged items as "gluten-free" (e.g. "gluten-free tamari", "gluten-free oats").
@@ -641,11 +757,53 @@ function getSingleDietBlock(diet, calorieTarget) {
 - YES: all proteins, non-starchy veg (greens, broccoli, cauliflower, zucchini, peppers), cheese, nuts, seeds, avocado, olive oil.
 - Make up calories from protein and fat. Verify total daily carbs ≤50g.`;
     case "dairy_free":
-      return `DIET: DAIRY-FREE — STRICT RULES:
-- NO dairy: no milk, cheese, butter, cream, yogurt, whey, casein, ghee, or lactose.
+      return `DIET: DAIRY-FREE / MILK ALLERGY — STRICT RULES (milk is one of the most common food-allergy anaphylaxis triggers — treat as zero tolerance, not just a preference):
+- NO dairy: no milk, cheese, butter, cream, yogurt, whey, casein, ghee, or lactose. This includes sheep, goat, and other animal milks, not just cow's milk — cross-reactivity between mammalian milks is common.
 - Watch for hidden dairy: use dairy-free dark chocolate, coconut/oat cream for sauces.
 - Name the dairy-free alternative explicitly (e.g. "oat milk latte" not "latte", "coconut yogurt" not "yogurt").
 - Grocery "dairy" list: dairy-free alternatives only — no actual dairy.`;
+    case "lactose_free":
+      return `DIET: LACTOSE-FREE — STRICT RULES:
+- NO regular milk, soft cheese, cream, or regular yogurt (lactose intolerance, not a dairy allergy).
+- YES: lactose-free milk/yogurt, hard aged cheeses (cheddar, parmesan — naturally very low lactose), butter (trace lactose, generally tolerated), plant-based alternatives.
+- Name the lactose-free alternative explicitly where used (e.g. "lactose-free milk" not "milk").
+- Add a tip if a meal contains a low-but-nonzero-lactose item (hard cheese, butter) so the crew member can judge their own tolerance.`;
+    case "nut_free":
+      return `DIET: NUT ALLERGY — STRICT RULES (life-threatening allergy, zero tolerance):
+- NO tree nuts (almonds, walnuts, cashews, pistachios, pecans, hazelnuts, macadamias, brazil nuts, pine nuts) or peanuts, in any form: whole, chopped, butters/spreads, milks, oils, flours, or as a garnish.
+- Watch for hidden nuts: granola, trail mix, pesto, some baked goods, Asian/Thai sauces (satay, some curries), marzipan, praline, nut-based crackers or energy bars.
+- NO substituting almond/cashew/peanut milk, flour, or butter for anything — use oat, soy (unless also soy-free), or dairy alternatives instead.
+- Add a cross-contamination warning in the "tip" for any packaged, restaurant, or airplane-catered item ("ask about nut cross-contact").`;
+    case "egg_free":
+      return `DIET: EGG-FREE — STRICT RULES:
+- NO eggs in any form: whole eggs, egg whites, mayonnaise, most baked goods leavened/bound with egg, some pastas, meringue, hollandaise/béarnaise sauce.
+- Watch for hidden egg: quiche, frittata, French toast, breaded/battered items, some processed meats (as binder), egg-wash glazed bread.
+- Protein must come from non-egg sources instead: meat, fish, dairy, legumes, tofu, nuts/seeds (unless also nut-free).
+- Name the egg-free alternative explicitly (e.g. "egg-free mayo" not "mayo").`;
+    case "shellfish_free":
+      return `DIET: SHELLFISH ALLERGY — STRICT RULES (can be life-threatening, zero tolerance):
+- NO crustaceans (shrimp, crab, lobster, crayfish) or mollusks (clams, mussels, oysters, scallops, squid, octopus), in any form: whole, in stocks/broths/sauces (e.g. oyster sauce, fish sauce often contains shellfish, shrimp paste), or as flavoring.
+- Fin fish (salmon, tuna, cod, tilapia, etc.) is generally fine unless the user also excluded fish elsewhere — shellfish and fish are different allergens.
+- Watch for hidden shellfish: some Asian sauces/pastes, paella, bouillabaisse, surimi/imitation crab (still shellfish-derived).
+- Add a cross-contamination warning in the "tip" for any seafood restaurant or airplane-catered item.`;
+    case "soy_free":
+      return `DIET: SOY ALLERGY — STRICT RULES (soy is one of the most common adult anaphylaxis triggers — zero tolerance):
+- NO soy in any form: soybeans, edamame, tofu, tempeh, soy sauce, soy milk, soy lecithin (common in chocolate/processed foods), soybean oil, miso.
+- Use coconut aminos or gluten-free tamari alternatives only if also verified soy-free; otherwise use plain sea salt for seasoning instead of soy sauce.
+- Watch for hidden soy: many processed/packaged foods, protein bars, some broths and marinades.
+- Protein must come from non-soy sources: meat, fish, eggs, dairy, legumes (other than soy), nuts/seeds (unless also nut-free).`;
+    case "sesame_free":
+      return `DIET: SESAME ALLERGY — STRICT RULES (sesame is a top-9 major food allergen, can be life-threatening, zero tolerance):
+- NO sesame in any form: seeds (whole or hulled), sesame oil, tahini, sesame paste, sesame flour, benne, gomashio.
+- Watch for hidden sesame: hummus and baba ganoush traditionally contain tahini (must be made/labeled sesame-free), halva, za'atar, some breads/bagels/buns/crackers with visible or baked-in seeds, many Middle Eastern and some Asian sauces/dressings, sesame-oil finishing drizzles.
+- Name the sesame-free alternative explicitly where a normally-sesame dish is used (e.g. "sesame-free hummus" not "hummus", "tahini-free dressing").
+- Add a cross-contamination warning in the "tip" for any packaged, restaurant, or airplane-catered item.`;
+    case "fodmap":
+      return `DIET: LOW-FODMAP — STRICT RULES:
+- NO high-FODMAP foods: onion, garlic, wheat, most legumes/beans, apples, pears, mango, watermelon, honey, high-fructose corn syrup, milk/soft cheese, cashews, pistachios.
+- YES: most meat/fish/eggs, rice, quinoa, oats, potatoes, most hard cheeses, lactose-free dairy, firm tofu, low-FODMAP veg (carrots, zucchini, spinach, bell peppers, tomatoes) and fruit (banana, grapes, oranges, strawberries, blueberries).
+- Use garlic-infused oil (not garlic itself) and the green tops of scallions (not onion) for allium flavor.
+- Note this is typically a temporary elimination-phase diet — add a tip suggesting the crew member confirm current tolerance for any borderline item.`;
     case "mediterranean":
       return `DIET: MEDITERRANEAN — STRICT RULES:
 - Primary fat: extra-virgin olive oil only (not butter, not vegetable/canola oil).
@@ -1477,6 +1635,13 @@ app.post("/api/referral/use", async (req, res) => {
 
 // ── MEAL CACHE HELPERS ────────────────────────────────────────────
 
+// These allergy/intolerance values used to silently fall through to the
+// "no restrictions" default in getSingleDietBlock (fixed above). Any cached
+// or pre-generated plan/bank entry keyed on one of them predates the fix and
+// may not actually respect the allergy — bust the cache key for these so
+// they're never served again and get freshly (correctly) regenerated.
+const PREVIOUSLY_UNHANDLED_DIET_VALUES = ["lactose_free", "nut_free", "egg_free", "shellfish_free", "soy_free", "fodmap"];
+
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
   const goals = (data.goals || []).slice().sort();
@@ -1494,8 +1659,10 @@ function buildCacheKey(data, ctx, lang) {
       : ctx.maintenanceTarget
         ? `maint${Math.round(ctx.maintenanceTarget / 200) * 200}`
         : "none";
+  const dietKeyBase = diets.join(",") || "none";
+  const needsCacheBust = diets.some(d => PREVIOUSLY_UNHANDLED_DIET_VALUES.includes(d));
   return {
-    dietKey: diets.join(",") || "none",
+    dietKey: needsCacheBust ? `${dietKeyBase}|v2` : dietKeyBase,
     goalKey: goals.join(",") || "none",
     budgetLevel,
     kitchenKey: kitchen,
@@ -1597,15 +1764,17 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         });
       }
       const entry = bankEntries[Math.floor(Math.random() * bankEntries.length)];
+      // Bank entries predate the allergen guard — check them too before serving.
+      const guardedBankDays = await applyAllergenGuard(entry.days, data, ctx);
       // Fire-and-forget: seed the DB cache so repeat requests get fresh AI variety
-      storeCachedDays(entry.days, cacheKey)
+      storeCachedDays(guardedBankDays, cacheKey)
         .then(r => { if (r.ids?.length) markDaysSeen(email, r.ids); })
         .catch(() => {});
       incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
       console.log(`[bank] HIT for ${email}: ${bankLookupKey}`);
       return res.json({
         summary: entry.summary,
-        days: entry.days,
+        days: guardedBankDays,
         groceryList: entry.groceryList,
         foodRestrictions: entry.foodRestrictions,
         performanceAdvisory: getCognitivePerfRules(data),
@@ -1756,6 +1925,8 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       const failedCount = aiDays.filter(d => d === null).length;
       console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${failedCount} failed extras=${cachedExtras ? "cache" : "ai"}`);
     }
+
+    days = await applyAllergenGuard(days, data, ctx);
 
     const extras = await extrasPromise;
 
