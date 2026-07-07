@@ -571,6 +571,12 @@ const ALLERGEN_RULES = {
   },
 };
 
+// Kosher's core rule isn't "banned ingredient present" like an allergy — it's
+// "meat and dairy never in the SAME meal". A simple presence-based keyword
+// scan can't express that, so this is a separate compositional check.
+const KOSHER_MEAT_WORDS = /\b(beef|chicken|turkey|lamb|veal|duck|goose|sausage|bacon|ham|pastrami|salami|jerky|meat|poultry)\b/i;
+const KOSHER_DAIRY_WORDS = /\b(cheese|milk|cream|butter|yogurt|yoghurt|whey|ghee)\b/i;
+
 // Scans one meal's text for banned terms belonging to the crew member's
 // active allergen/intolerance selections. A banned term is only a violation
 // if the diet has no qualifier pattern, or the qualifier phrase isn't also
@@ -585,6 +591,9 @@ function findMealAllergenViolations(meal, activeDiets) {
     if (!match) continue;
     if (rule.qualifier && rule.qualifier.test(text)) continue;
     violations.push({ diet, term: match[0] });
+  }
+  if (activeDiets.includes("kosher") && KOSHER_MEAT_WORDS.test(text) && KOSHER_DAIRY_WORDS.test(text)) {
+    violations.push({ diet: "kosher", term: "meat and dairy combined in one meal" });
   }
   return violations;
 }
@@ -618,7 +627,7 @@ Generate a REPLACEMENT ${meal.type} meal that fully complies with the rule above
 // may have been produced before this guard existed.
 async function applyAllergenGuard(days, data, ctx) {
   const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
-  const activeDiets = rawDiets.filter(d => ALLERGEN_RULES[d]);
+  const activeDiets = rawDiets.filter(d => ALLERGEN_RULES[d] || d === "kosher");
   if (activeDiets.length === 0) return days;
 
   let violationCount = 0;
