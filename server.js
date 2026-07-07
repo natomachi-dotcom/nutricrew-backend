@@ -1469,7 +1469,7 @@ app.post("/api/auth/verify-otp", async (req, res) => {
     });
     const data = await checkRes.json();
     if (!checkRes.ok) return res.status(checkRes.status).json(data);
-    res.json(data);
+    res.json({ ...data, ...toFrontendProfileFields(data) });
   } catch (err) {
     console.error("verify-otp error:", err.message);
     res.status(500).json({ error: "Verification failed. Please try again." });
@@ -1493,7 +1493,7 @@ app.post("/api/auth/login-password", loginLimiter, async (req, res) => {
     });
     const data = await checkRes.json();
     if (!checkRes.ok) return res.status(checkRes.status).json(data);
-    res.json(data);
+    res.json({ ...data, ...toFrontendProfileFields(data) });
   } catch (err) {
     console.error("login-password error:", err.message);
     res.status(500).json({ error: "Login failed. Please try again." });
@@ -1534,16 +1534,16 @@ app.post("/api/auth/verify-session", async (req, res) => {
     });
     const data = await checkRes.json();
     if (!checkRes.ok) return res.status(checkRes.status).json(data);
-    res.json(data);
+    res.json({ ...data, ...toFrontendProfileFields(data) });
   } catch (err) {
     console.error("verify-session error:", err.message);
     res.status(500).json({ error: "Session check failed." });
   }
 });
 
-// Persists durable profile preferences (currently: budget) to the user's
-// server-side record, so they survive a cleared cache or a new device —
-// not just localStorage on whichever browser set them.
+// Persists durable profile preferences to the user's server-side record, so
+// they survive a cleared cache or a new device — not just localStorage on
+// whichever browser set them.
 // Frontend uses snake_case (matches the pairing/check-in object shape);
 // the CRUD API's User schema uses camelCase. This is the single mapping
 // between the two — reused for both saving and reading these fields back.
@@ -1553,7 +1553,7 @@ const PROFILE_FIELD_MAP = {
   diets: "diets", diet_other: "dietOther", goals: "goals",
   calorie_target: "calorieTarget", calorie_deficit_amount: "calorieDeficitAmount",
   calorie_deficit_preset: "calorieDeficitPreset", departure: "departure",
-  budget_type: "budgetType", budget_amount: "budgetAmount",
+  budget_type: "budgetType", budget_amount: "budgetAmount", kitchen: "kitchen",
 };
 function toCrudProfileFields(snakeCaseFields) {
   const out = {};
