@@ -1812,7 +1812,10 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       storeCachedDays(guardedBankDays, cacheKey)
         .then(r => { if (r.ids?.length) markDaysSeen(email, r.ids); })
         .catch(() => {});
-      incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
+      // Must be awaited (not fire-and-forget): the response below is the
+      // client's earliest signal that this pairing succeeded, so a fast
+      // second request must never be able to read the pre-increment count.
+      await incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
       console.log(`[bank] HIT for ${email}: ${bankLookupKey}`);
       return res.json({
         summary: entry.summary,
@@ -1978,9 +1981,12 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       extras.foodRestrictions = { ...extras.foodRestrictions, carried: carriedNote };
     }
 
-    // Fire-and-forget: mark seen + increment (neither blocks the response)
+    // markDaysSeen is fire-and-forget (doesn't gate anything). The pairing
+    // count increment must be awaited: the response below is the client's
+    // earliest signal that this pairing succeeded, so a fast second request
+    // must never be able to read the pre-increment count.
     markDaysSeen(email, [...cachedDayIds, ...newDayIds]);
-    incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
+    await incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
 
     const failedDays = days.filter(d => d.failed).map(d => d.day);
     const planResponse = {
