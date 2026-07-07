@@ -1285,6 +1285,14 @@ const BORDER_COUNTRY_RULES = [
 // Returns array of restricted-border entries that apply to this pairing.
 // Each entry carries the days[] it was detected on (empty = triggered by going_usa flag
 // with no specific airport found in destinations).
+// Destination/departure fields hold a free-typed string like "Toronto (YYZ)"
+// (matching the app's own input placeholder convention), not a bare code —
+// pull just the airport code out before matching against BORDER_COUNTRY_RULES.
+function extractAirportCode(str) {
+  const s = (str || "").trim();
+  return (s.match(/\(([A-Za-z]{3,4})\)/)?.[1] || s.slice(0, 3)).toUpperCase();
+}
+
 // A pairing's bag isn't just exposed to each day's destination — it also has
 // to clear the crew member's OWN home-country customs on return. Without this,
 // e.g. a Canada-based crew member flying to the USA and back would never see
@@ -1296,9 +1304,9 @@ function detectRestrictedBorders(destinations, goingUsa, departure) {
   for (const rule of BORDER_COUNTRY_RULES) {
     const days = [];
     dests.forEach((d, i) => {
-      if (d && rule.codes.includes((d || "").toUpperCase().trim())) days.push(i + 1);
+      if (d && rule.codes.includes(extractAirportCode(d))) days.push(i + 1);
     });
-    const onReturn = !!(departure && rule.codes.includes((departure || "").toUpperCase().trim()));
+    const onReturn = !!(departure && rule.codes.includes(extractAirportCode(departure)));
     const triggered = days.length > 0 || onReturn || (rule.usaFlagTrigger && goingUsa === "yes");
     if (triggered) found.push({ id: rule.id, name: rule.name, carriedBans: rule.carriedBans, days, onReturn });
   }
