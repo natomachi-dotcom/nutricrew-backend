@@ -1678,12 +1678,12 @@ app.post("/api/referral/use", async (req, res) => {
 
 // ── MEAL CACHE HELPERS ────────────────────────────────────────────
 
-// These allergy/intolerance values used to silently fall through to the
-// "no restrictions" default in getSingleDietBlock (fixed above). Any cached
-// or pre-generated plan/bank entry keyed on one of them predates the fix and
-// may not actually respect the allergy — bust the cache key for these so
-// they're never served again and get freshly (correctly) regenerated.
-const PREVIOUSLY_UNHANDLED_DIET_VALUES = ["lactose_free", "nut_free", "egg_free", "shellfish_free", "soy_free", "fodmap"];
+// Bump this whenever MEAL_SCHEMA gains a new required field or the prompt
+// changes in a way that makes an old cached meal invalid/incomplete (e.g.
+// adding "ingredients" — every previously-cached meal was missing it).
+// Folded into every cache key so old entries become unreachable and get
+// freshly regenerated under the current schema/prompt.
+const CACHE_SCHEMA_VERSION = "v3";
 
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
@@ -1703,9 +1703,8 @@ function buildCacheKey(data, ctx, lang) {
         ? `maint${Math.round(ctx.maintenanceTarget / 200) * 200}`
         : "none";
   const dietKeyBase = diets.join(",") || "none";
-  const needsCacheBust = diets.some(d => PREVIOUSLY_UNHANDLED_DIET_VALUES.includes(d));
   return {
-    dietKey: needsCacheBust ? `${dietKeyBase}|v2` : dietKeyBase,
+    dietKey: `${dietKeyBase}|${CACHE_SCHEMA_VERSION}`,
     goalKey: goals.join(",") || "none",
     budgetLevel,
     kitchenKey: kitchen,
