@@ -257,12 +257,17 @@ const MEAL_SCHEMA = {
     carbs: { type: "integer" },
     fat: { type: "integer" },
     tags: { type: "array", items: { type: "string" } },
+    ingredients: {
+      type: "array",
+      items: { type: "string" },
+      description: "Each distinct ingredient by short name (e.g. \"eggs\", \"spinach\", \"feta cheese\") — specific enough for a crew member to spot a personal allergen, not full recipe steps.",
+    },
     tip: { type: "string" },
     recyclingTip: { type: "string" },
     emoji: { type: "string" },
     container: { type: "string", description: "Recommended Tupperware/container size and shape for packing this meal, e.g. '500ml rectangular container' or '300ml round container with dividers'. Only include if a lunch bag size was provided." },
   },
-  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji"],
+  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients"],
   additionalProperties: false,
 };
 
@@ -611,7 +616,7 @@ ${dietRules}
 
 ${kitchenAccessBlock}
 
-Generate a REPLACEMENT ${meal.type} meal that fully complies with the rule above and the kitchen access constraints, keeping calories close to ${meal.calories} kcal. Return ONLY the meal JSON — no violating ingredient anywhere in the name, description, or tip.`;
+Generate a REPLACEMENT ${meal.type} meal that fully complies with the rule above and the kitchen access constraints, keeping calories close to ${meal.calories} kcal. Include an "ingredients" array listing each distinct ingredient by short name. Return ONLY the meal JSON — no violating ingredient anywhere in the name, description, tip, or ingredients.`;
   try {
     const replacement = await runStructured(prompt, MEAL_SCHEMA, 700, FAST_MODEL);
     return { ...replacement, type: meal.type };
@@ -1031,7 +1036,7 @@ Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 Each day: include Breakfast, Lunch, Dinner, and 1-2 Snacks.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
-Every meal must include a "tip" and an "emoji" field with 2–3 food emoji accurately representing the meal.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}${ctx.airplaneMealDesc ? `\nThe crew member has told us their airplane meal will include: "${ctx.airplaneMealDesc}". For any meal of type "airplane_food", describe how to complement or adapt this specific meal (e.g. add protein, skip the dessert, supplement with a snack). Plan the rest of the day's meals to balance the nutrients already provided by this airplane meal.` : ""}
+Every meal must include a "tip" and an "emoji" field with 2–3 food emoji accurately representing the meal. Every meal must also include an "ingredients" array listing each distinct ingredient by short name (e.g. "eggs", "spinach", "feta cheese") — specific enough for a crew member to spot a personal allergen, not full recipe steps.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}${ctx.airplaneMealDesc ? `\nThe crew member has told us their airplane meal will include: "${ctx.airplaneMealDesc}". For any meal of type "airplane_food", describe how to complement or adapt this specific meal (e.g. add protein, skip the dessert, supplement with a snack). Plan the rest of the day's meals to balance the nutrients already provided by this airplane meal.` : ""}
 Vary meal choices across all days — different recipes, ingredients, and combinations each day.
 
 Per-day instructions:
@@ -2073,6 +2078,36 @@ app.post("/api/check-airplane-meal", async (req, res) => {
     }
 
     res.json(extractJSON(message));
+  } catch (err) {
+    handleAnthropicError(err, res);
+  }
+});
+
+// Manual, user-triggered version of the automatic allergen guard: a crew
+// member taps a specific ingredient on a generated meal (e.g. one that isn't
+// covered by any of their selected allergy checkboxes) and this regenerates
+// just that meal without it. Free for everyone — this is a safety
+// correction, not a premium feature.
+app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
+  try {
+    const { meal, excludeIngredient, data, lang } = req.body;
+    if (!meal || typeof meal !== "object" || !meal.type || !meal.name) {
+      return res.status(400).json({ error: "Missing or invalid 'meal'" });
+    }
+    if (!excludeIngredient || typeof excludeIngredient !== "string" || excludeIngredient.length > 100) {
+      return res.status(400).json({ error: "Missing or invalid 'excludeIngredient'" });
+    }
+    if (!data || typeof data !== "object") {
+      return res.status(400).json({ error: "Missing 'data'" });
+    }
+
+    const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
+    const ctx = buildContext(data, lang, pairingDays);
+    const personalNote = `${ctx.dietRules}\n\nPERSONAL ALLERGY: The crew member has personally flagged "${excludeIngredient}" as something they cannot eat, separate from the diet rules above. Do not include it in any form.`;
+    const replacement = await regenerateCompliantMeal(
+      meal, [{ diet: "personal allergy", term: excludeIngredient }], personalNote, ctx.kitchenAccessBlock
+    );
+    res.json({ meal: replacement });
   } catch (err) {
     handleAnthropicError(err, res);
   }
