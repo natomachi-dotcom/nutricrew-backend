@@ -987,7 +987,7 @@ function buildContext(data, lang, pairingDays) {
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
   const cognitivePerfRules = getCognitivePerfRules(data);
-  const restrictedBorders = detectRestrictedBorders(data.destinations, data.going_usa);
+  const restrictedBorders = detectRestrictedBorders(data.destinations, data.going_usa, data.departure);
 
   return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules, restrictedBorders };
 }
@@ -1268,12 +1268,29 @@ const BORDER_COUNTRY_RULES = [
       "Alcoholic beverages",
     ],
   },
+  {
+    id: "canada",
+    name: "Canada (CBSA/CFIA)",
+    codes: ["YYZ","YVR","YUL","YYC","YEG","YOW","YWG","YHZ","YQB","YXE","YQR","YXX","YXU","YHM","YWG","YQM","YFC","YQT","YZF"],
+    carriedBans: [
+      "Fresh fruits and vegetables without a phytosanitary certificate",
+      "Meat, poultry, and meat products (unless commercially canned/pouched and shelf-stable)",
+      "Raw or unpasteurized dairy products",
+      "Raw eggs or egg products (unless commercially sealed/pasteurized)",
+      "Plants, seeds, or soil-bearing plant material",
+    ],
+  },
 ];
 
 // Returns array of restricted-border entries that apply to this pairing.
 // Each entry carries the days[] it was detected on (empty = triggered by going_usa flag
 // with no specific airport found in destinations).
-function detectRestrictedBorders(destinations, goingUsa) {
+// A pairing's bag isn't just exposed to each day's destination — it also has
+// to clear the crew member's OWN home-country customs on return. Without this,
+// e.g. a Canada-based crew member flying to the USA and back would never see
+// Canada's own carried-food restrictions applied to whatever they bought
+// abroad and are bringing home.
+function detectRestrictedBorders(destinations, goingUsa, departure) {
   const dests = destinations || [];
   const found = [];
   for (const rule of BORDER_COUNTRY_RULES) {
@@ -1281,8 +1298,9 @@ function detectRestrictedBorders(destinations, goingUsa) {
     dests.forEach((d, i) => {
       if (d && rule.codes.includes((d || "").toUpperCase().trim())) days.push(i + 1);
     });
-    const triggered = days.length > 0 || (rule.usaFlagTrigger && goingUsa === "yes");
-    if (triggered) found.push({ id: rule.id, name: rule.name, carriedBans: rule.carriedBans, days });
+    const onReturn = !!(departure && rule.codes.includes((departure || "").toUpperCase().trim()));
+    const triggered = days.length > 0 || onReturn || (rule.usaFlagTrigger && goingUsa === "yes");
+    if (triggered) found.push({ id: rule.id, name: rule.name, carriedBans: rule.carriedBans, days, onReturn });
   }
   return found;
 }
@@ -1303,9 +1321,10 @@ function unionCarriedBans(restrictedBorders) {
 function buildCarriedFoodPromptBlock(restrictedBorders) {
   if (!restrictedBorders || restrictedBorders.length === 0) return "";
   const countryLines = restrictedBorders.map(b => {
-    const dayStr = b.days.length > 0
-      ? ` (Day${b.days.length > 1 ? "s" : ""} ${b.days.join(" & ")})`
-      : " (during this pairing)";
+    const parts = [];
+    if (b.days.length > 0) parts.push(`Day${b.days.length > 1 ? "s" : ""} ${b.days.join(" & ")}`);
+    if (b.onReturn) parts.push("on return home");
+    const dayStr = parts.length > 0 ? ` (${parts.join("; ")})` : " (during this pairing)";
     return `  • ${b.name}${dayStr}`;
   }).join("\n");
   const banLines = unionCarriedBans(restrictedBorders).map(b => `  ❌ ${b}`).join("\n");
@@ -1326,8 +1345,10 @@ For any packed/carried meal "tip": briefly explain WHY shelf-stable — e.g. "Ca
 function buildCarriedFoodNote(restrictedBorders) {
   if (!restrictedBorders || restrictedBorders.length === 0) return null;
   const countryStrs = restrictedBorders.map(b => {
-    const dayStr = b.days.length > 0 ? ` (Day ${b.days.join(", ")})` : "";
-    return `${b.name}${dayStr}`;
+    const parts = [];
+    if (b.days.length > 0) parts.push(`Day ${b.days.join(", ")}`);
+    if (b.onReturn) parts.push("on return home");
+    return `${b.name}${parts.length > 0 ? ` (${parts.join("; ")})` : ""}`;
   });
   const bans = unionCarriedBans(restrictedBorders);
   return `Your bag crosses ${countryStrs.length > 1 ? "multiple restricted borders" : "a restricted border"} on this pairing: ${countryStrs.join("; ")}.\n\nAny food packed at home or carried between stops must clear ALL of these customs checkpoints. The following items cannot be packed or carried anywhere on this pairing:\n${bans.map(b => `• ${b}`).join("\n")}\n\nLocally-purchased food bought and eaten entirely at one stop (nothing packed for later) does not have these restrictions.\n\nSafe to pack and carry: commercially packaged and sealed, canned, dried, or shelf-stable items only.`;
