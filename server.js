@@ -3201,6 +3201,52 @@ app.post("/api/create-portal-session", async (req, res) => {
   }
 });
 
+// Switches an existing subscriber's active subscription to annual billing in
+// place (proration, not a new checkout) — reuses whatever product the
+// subscription is already on, so this never creates a new Stripe product.
+app.post("/api/switch-to-annual", async (req, res) => {
+  try {
+    const { email } = req.body;
+    const normalizedEmail = (email || "").toLowerCase().trim();
+    if (!email || !EMAIL_REGEX.test(normalizedEmail)) {
+      return res.status(400).json({ error: "Missing or invalid email" });
+    }
+    if (!stripe) {
+      return res.status(503).json({ error: "Payments not configured" });
+    }
+    const customerId = await getExistingStripeCustomerId(normalizedEmail);
+    if (!customerId) {
+      return res.status(404).json({ error: "No subscription found for this account." });
+    }
+    const subs = await stripe.subscriptions.list({ customer: customerId, status: "all", limit: 1 });
+    const subscription = subs.data[0];
+    if (!subscription || !["active", "trialing", "past_due"].includes(subscription.status)) {
+      return res.status(404).json({ error: "No active subscription found." });
+    }
+    const item = subscription.items.data[0];
+    if (item.price.recurring?.interval === "year") {
+      return res.json({ alreadyAnnual: true });
+    }
+
+    await stripe.subscriptions.update(subscription.id, {
+      items: [{
+        id: item.id,
+        price_data: {
+          currency: "usd",
+          unit_amount: 6232, // matches the paywall's annual price (35% off 12 months at $7.99)
+          recurring: { interval: "year" },
+          product: typeof item.price.product === "string" ? item.price.product : item.price.product.id,
+        },
+      }],
+      proration_behavior: "create_prorations",
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Switch to annual error:", err.message);
+    res.status(500).json({ error: "Could not switch to annual billing." });
+  }
+});
+
 // --- Error handling ---
 
 app.use((req, res) => {
