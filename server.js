@@ -376,6 +376,8 @@ function handleAnthropicError(err, res) {
 }
 
 // Checks the free-tier pairing limit against the user's record in the CRUD backend.
+// Read-only — does not consume a pairing. Used by premium-gated features
+// (roster, gym plans, jetlag plans) that only care about usage.isPremium.
 async function checkPairingUsage(email, name, clientIP) {
   const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/check`, {
     method: "POST",
@@ -388,14 +390,31 @@ async function checkPairingUsage(email, name, clientIP) {
   return res.json();
 }
 
-async function incrementPairingUsage(email) {
-  const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/increment`, {
+// Atomically checks-and-consumes a free pairing slot in one DB operation —
+// unlike checkPairingUsage, this actually decides the request's fate, so it
+// must be called once, up front, by anything that's about to generate a
+// plan. If generation fails afterward, call releasePairingUsage to give a
+// non-premium user's slot back.
+async function reservePairingUsage(email, name, clientIP) {
+  const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/reserve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
+    body: JSON.stringify({ email, name, clientIP }),
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error("Failed to reserve pairing usage"), { status: 502 });
+  }
+  return res.json();
+}
+
+async function releasePairingUsage(email) {
+  const res = await fetch(`${CRUD_API_BASE}/api/pairing-usage/release`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
     body: JSON.stringify({ email }),
   });
   if (!res.ok) {
-    throw Object.assign(new Error("Failed to record pairing usage"), { status: 502 });
+    throw Object.assign(new Error("Failed to release pairing usage"), { status: 502 });
   }
   return res.json();
 }
@@ -1764,6 +1783,12 @@ async function markDaysSeen(email, dayIds) {
 // ─────────────────────────────────────────────────────────────────
 
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
+  // Tracks whether reservePairingUsage actually consumed a non-premium
+  // user's free slot for THIS request, so a later failure (calorie_deficit
+  // gate, AI/generation error) can give it back instead of silently
+  // burning their one free pairing on a request that never produced a plan.
+  let reservedFreeSlot = false;
+  let reservedEmail = null;
   try {
     const { data, lang } = req.body;
     if (!data) return res.status(400).json({ error: "Missing 'data' in request body" });
@@ -1771,6 +1796,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     const email = (data.email || "").toLowerCase().trim();
     if (!email) return res.status(400).json({ error: "Missing 'email' in request data" });
     if (!EMAIL_REGEX.test(email)) return res.status(400).json({ error: "Invalid 'email' format" });
+    reservedEmail = email;
 
     const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
     const ctx = buildContext(data, lang, pairingDays);
@@ -1790,7 +1816,9 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     // generated without carried-food constraints and may include prohibited items.
     const bankEntries = ctx.restrictedBorders.length === 0 ? (PLAN_BANK_MAP[bankLookupKey] || []) : [];
     if (bankEntries.length > 0) {
-      const usage = await checkPairingUsage(email, data.name, req.ip);
+      // Atomic check-and-consume: closes the race where two concurrent
+      // requests could both read "allowed" before either had incremented.
+      const usage = await reservePairingUsage(email, data.name, req.ip);
       if (!usage.allowed) {
         return res.status(403).json({
           error: "premium_required",
@@ -1798,11 +1826,14 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           pairingCount: usage.pairingCount,
         });
       }
+      reservedFreeSlot = !usage.isPremium;
       if (reqDiets.includes("calorie_deficit") && !usage.isPremium) {
+        await releasePairingUsage(email).catch(e => console.error("release failed:", e.message));
+        reservedFreeSlot = false;
         return res.status(403).json({
           error: "premium_required",
           message: "Calorie Deficit plans are a Premium feature. Upgrade to Premium to unlock this and unlimited plans.",
-          pairingCount: usage.pairingCount,
+          pairingCount: usage.pairingCount - 1,
         });
       }
       const entry = bankEntries[Math.floor(Math.random() * bankEntries.length)];
@@ -1812,10 +1843,6 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       storeCachedDays(guardedBankDays, cacheKey)
         .then(r => { if (r.ids?.length) markDaysSeen(email, r.ids); })
         .catch(() => {});
-      // Must be awaited (not fire-and-forget): the response below is the
-      // client's earliest signal that this pairing succeeded, so a fast
-      // second request must never be able to read the pre-increment count.
-      await incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
       console.log(`[bank] HIT for ${email}: ${bankLookupKey}`);
       return res.json({
         summary: entry.summary,
@@ -1824,16 +1851,19 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         foodRestrictions: entry.foodRestrictions,
         performanceAdvisory: getCognitivePerfRules(data),
         hydration: computeHydration(data),
-        pairingCount: usage.pairingCount + 1,
+        pairingCount: usage.pairingCount,
         isPremium: usage.isPremium,
         hasPassword: usage.hasPassword,
       });
     }
 
     // ── Normal flow (bank miss) ───────────────────────────────────
-    // Run auth check, meal cache query, and extras cache query all in parallel
+    // Run auth check, meal cache query, and extras cache query all in parallel.
+    // reservePairingUsage atomically checks-and-consumes in one DB operation —
+    // closes the race where two concurrent requests could both read
+    // "allowed" before either had incremented.
     const [usage, { days: cachedDays }, cachedExtras] = await Promise.all([
-      checkPairingUsage(email, data.name, req.ip),
+      reservePairingUsage(email, data.name, req.ip),
       queryCachedDays(email, cacheKey, pairingDays),
       queryExtrasCache(extrasKey),
     ]);
@@ -1845,12 +1875,15 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         pairingCount: usage.pairingCount,
       });
     }
+    reservedFreeSlot = !usage.isPremium;
 
     if (reqDiets.includes("calorie_deficit") && !usage.isPremium) {
+      await releasePairingUsage(email).catch(e => console.error("release failed:", e.message));
+      reservedFreeSlot = false;
       return res.status(403).json({
         error: "premium_required",
         message: "Calorie Deficit plans are a Premium feature. Upgrade to Premium to unlock this and unlimited plans.",
-        pairingCount: usage.pairingCount,
+        pairingCount: usage.pairingCount - 1,
       });
     }
 
@@ -1981,12 +2014,9 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       extras.foodRestrictions = { ...extras.foodRestrictions, carried: carriedNote };
     }
 
-    // markDaysSeen is fire-and-forget (doesn't gate anything). The pairing
-    // count increment must be awaited: the response below is the client's
-    // earliest signal that this pairing succeeded, so a fast second request
-    // must never be able to read the pre-increment count.
+    // Fire-and-forget: doesn't gate anything. The pairing count itself was
+    // already atomically consumed by reservePairingUsage above.
     markDaysSeen(email, [...cachedDayIds, ...newDayIds]);
-    await incrementPairingUsage(email).catch(e => console.error("increment failed:", e.message));
 
     const failedDays = days.filter(d => d.failed).map(d => d.day);
     const planResponse = {
@@ -1996,7 +2026,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       foodRestrictions: extras.foodRestrictions,
       performanceAdvisory: getCognitivePerfRules(data),
       hydration: computeHydration(data),
-      pairingCount: usage.pairingCount + 1,
+      pairingCount: usage.pairingCount,
       isPremium: usage.isPremium,
       hasPassword: usage.hasPassword,
       ...(failedDays.length ? { failedDays } : {}),
@@ -2016,6 +2046,11 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
     res.json(planResponse);
   } catch (err) {
+    // A reserved free slot must not be burned by a failed generation attempt —
+    // give it back before reporting the error.
+    if (reservedFreeSlot && reservedEmail) {
+      await releasePairingUsage(reservedEmail).catch(e => console.error("release failed:", e.message));
+    }
     handleAnthropicError(err, res);
   }
 });
