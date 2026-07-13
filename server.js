@@ -912,6 +912,7 @@ function getCognitivePerfRules(data) {
   const reportTime = (data.report_time || "").trim();
   const dutyHours = parseInt(data.duty_hours, 10) || 0;
   const layoverType = (data.layover_type || "").trim();
+  const layoverInBase = data.layover_in_base === "yes";
   const flightDir = (data.flight_direction || "").trim();
 
   if (!reportTime && !dutyHours && !layoverType && !flightDir) return null;
@@ -936,7 +937,11 @@ function getCognitivePerfRules(data) {
   }
 
   if (layoverType === "short") {
-    rules.push(`SHORT LAYOVER (≤8h — sleep opportunity): Nutrition must prioritize RECOVERY SLEEP. Pre-sleep: light tryptophan-rich meal (turkey, banana, warm milk). Avoid alcohol, caffeine, and heavy meals within 3h of sleep. On wake: rapid high-protein snack before next duty block.`);
+    // Minimum rest before a layover counts as "short" is 10h away from home
+    // base, 12h at home base — never shorter.
+    const minHours = layoverInBase ? 12 : 10;
+    const whereText = layoverInBase ? "at home base" : "away from base";
+    rules.push(`SHORT LAYOVER (${minHours}–16h, ${whereText} — sleep opportunity): Nutrition must prioritize RECOVERY SLEEP. Pre-sleep: light tryptophan-rich meal (turkey, banana, warm milk). Avoid alcohol, caffeine, and heavy meals within 3h of sleep. On wake: rapid high-protein snack before next duty block.`);
   } else if (layoverType === "long") {
     rules.push(`LONG LAYOVER (24h+): Full recovery window. Day 1 layover: hydrate aggressively, eat anti-inflammatory foods (berries, omega-3 fish, leafy greens). Day 2: align meal timing with destination time zone. Prioritize recovery sleep nutrition (tryptophan, magnesium-rich foods).`);
   }
