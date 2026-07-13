@@ -195,7 +195,7 @@ async function getExistingStripeCustomerId(email) {
 }
 
 // Mirrors the frontend's 1-5 day picker — caps the number of parallel
-// per-day Sonnet calls a single request can trigger.
+// per-day Haiku calls a single request can trigger.
 const MAX_PAIRING_DAYS = 5;
 // Generous enough for the frontend's templated prompts plus a long
 // free-text description, while blocking grossly oversized input.
