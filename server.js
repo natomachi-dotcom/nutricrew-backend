@@ -1822,7 +1822,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       if (!usage.allowed) {
         return res.status(403).json({
           error: "premium_required",
-          message: "You've used your free pairing plan. Upgrade to Premium for unlimited plans.",
+          message: "A Premium subscription is required to generate plans. Start your free month for unlimited plans.",
           pairingCount: usage.pairingCount,
         });
       }
@@ -1871,7 +1871,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     if (!usage.allowed) {
       return res.status(403).json({
         error: "premium_required",
-        message: "You've used your free pairing plan. Upgrade to Premium for unlimited plans.",
+        message: "A Premium subscription is required to generate plans. Start your free month for unlimited plans.",
         pairingCount: usage.pairingCount,
       });
     }
@@ -3154,7 +3154,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
       line_items: [{
         price_data: {
           currency: "usd",
-          unit_amount: isAnnual ? 6232 : 799, // annual is 35% off 12 months at $7.99
+          unit_amount: isAnnual ? 6712 : 799, // annual $67.12 = 30% off 12×$7.99 ($95.88); monthly $7.99
           recurring: { interval: isAnnual ? "year" : "month" },
           product_data: {
             name: isAnnual ? "NutriCrew Premium (Annual)" : "NutriCrew Premium (Monthly)",
@@ -3233,7 +3233,7 @@ app.post("/api/switch-to-annual", async (req, res) => {
         id: item.id,
         price_data: {
           currency: "usd",
-          unit_amount: 6232, // matches the paywall's annual price (35% off 12 months at $7.99)
+          unit_amount: 6712, // matches the paywall's annual price ($67.12 = 30% off 12×$7.99)
           recurring: { interval: "year" },
           product: typeof item.price.product === "string" ? item.price.product : item.price.product.id,
         },
