@@ -601,12 +601,19 @@ const ALLERGEN_RULES = {
 const KOSHER_MEAT_WORDS = /\b(beef|chicken|turkey|lamb|veal|duck|goose|sausage|bacon|ham|pastrami|salami|jerky|meat|poultry)\b/i;
 const KOSHER_DAIRY_WORDS = /\b(cheese|milk|cream|butter|yogurt|yoghurt|whey|ghee)\b/i;
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // Scans one meal's text for banned terms belonging to the crew member's
 // active allergen/intolerance selections. A banned term is only a violation
 // if the diet has no qualifier pattern, or the qualifier phrase isn't also
 // present somewhere in the same meal (e.g. "gluten-free tamari" is fine).
-function findMealAllergenViolations(meal, activeDiets) {
-  const text = [meal.name, meal.description, meal.tip, ...(meal.tags || [])].filter(Boolean).join(" ");
+// customAllergyTerm is the crew member's own free-text "Other" allergy (not
+// covered by any fixed ALLERGEN_RULES entry) — matched as a plain whole-word,
+// case-insensitive search since there's no curated banned/qualifier pattern for it.
+function findMealAllergenViolations(meal, activeDiets, customAllergyTerm) {
+  const text = [meal.name, meal.description, meal.tip, ...(meal.tags || []), ...(meal.ingredients || [])].filter(Boolean).join(" ");
   const violations = [];
   for (const diet of activeDiets) {
     const rule = ALLERGEN_RULES[diet];
@@ -618,6 +625,12 @@ function findMealAllergenViolations(meal, activeDiets) {
   }
   if (activeDiets.includes("kosher") && KOSHER_MEAT_WORDS.test(text) && KOSHER_DAIRY_WORDS.test(text)) {
     violations.push({ diet: "kosher", term: "meat and dairy combined in one meal" });
+  }
+  if (customAllergyTerm) {
+    // "s?" tolerates a simple plural (e.g. "kiwi" also catches "kiwis") — not
+    // full stemming, but cheap insurance against the most common miss.
+    const match = text.match(new RegExp(`\\b${escapeRegExp(customAllergyTerm)}s?\\b`, "i"));
+    if (match) violations.push({ diet: "allergy_other", term: match[0] });
   }
   return violations;
 }
@@ -652,18 +665,21 @@ Generate a REPLACEMENT ${meal.type} meal that fully complies with the rule above
 async function applyAllergenGuard(days, data, ctx) {
   const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
   const activeDiets = rawDiets.filter(d => ALLERGEN_RULES[d] || d === "kosher");
-  if (activeDiets.length === 0) return days;
+  const customAllergyTerm = rawDiets.includes("allergy_other")
+    ? (data.allergy_other_text || "").trim().slice(0, 100)
+    : "";
+  if (activeDiets.length === 0 && !customAllergyTerm) return days;
 
   let violationCount = 0;
   const guardedDays = await Promise.all(days.map(async (day) => {
     if (!day?.meals) return day;
     const meals = await Promise.all(day.meals.map(async (meal) => {
-      const violations = findMealAllergenViolations(meal, activeDiets);
+      const violations = findMealAllergenViolations(meal, activeDiets, customAllergyTerm);
       if (violations.length === 0) return meal;
       violationCount++;
       console.warn(`[allergen-guard] "${meal.name}" violates ${violations.map(v => `${v.diet}("${v.term}")`).join(", ")} — regenerating`);
       const replacement = await regenerateCompliantMeal(meal, violations, ctx.dietRules, ctx.kitchenAccessBlock);
-      const stillViolating = findMealAllergenViolations(replacement, activeDiets);
+      const stillViolating = findMealAllergenViolations(replacement, activeDiets, customAllergyTerm);
       if (stillViolating.length > 0) {
         console.error(`[allergen-guard] "${replacement.name}" STILL violates ${stillViolating.map(v => v.diet).join(", ")} after regeneration — serving anyway, flag for review`);
       }
@@ -746,7 +762,7 @@ function buildKitchenAccessBlock(kitchen) {
 }
 
 // Returns the rule block for a single diet key.
-function getSingleDietBlock(diet, calorieTarget) {
+function getSingleDietBlock(diet, calorieTarget, data) {
   switch (diet) {
     case "none":
       return `DIET: No restrictions. Aim for balanced meals with proteins, complex carbs, healthy fats, and vegetables.`;
@@ -857,13 +873,20 @@ function getSingleDietBlock(diet, calorieTarget) {
 - No food-type restrictions. Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods for satiety.${calorieTarget ? `\n- Daily target: ${calorieTarget} kcal — meal calories must sum to ±50 kcal of this.` : ""}`;
     case "other":
       return `DIET: Custom (see Diet field in CREW PROFILE above). Follow stated preferences closely; when in doubt, avoid anything that might conflict.`;
+    case "allergy_other": {
+      const term = (data?.allergy_other_text || "").trim().slice(0, 100) || "the ingredient noted in the crew profile";
+      return `DIET: CUSTOM ALLERGY — STRICT RULES (treat as a real, potentially life-threatening allergy, zero tolerance):
+- The crew member is allergic to "${term}". NEVER include it, any dish made primarily from it, or any common hidden/derivative form of it (sauces, oils, flours, extracts, garnishes, or cross-contaminated preparations).
+- If uncertain whether an ingredient is related to "${term}", exclude it — err on the side of caution.
+- Add a cross-contamination warning in the "tip" field for any packaged, restaurant, or airplane-catered item that could plausibly contain it.`;
+    }
     default:
       return `DIET: No restrictions. Balanced, nutritious meals with variety.`;
   }
 }
 
 // Accepts a single diet string or an array of diets (multi-select).
-function getDietRules(rawDiet, calorieTarget) {
+function getDietRules(rawDiet, calorieTarget, data) {
   const FOOTER = `\nCRITICAL: Check every ingredient against the rules above before finalizing each meal. Replace any violating item. Full compliance required — no partial exceptions.`;
 
   const diets = Array.isArray(rawDiet) ? rawDiet : (rawDiet ? [rawDiet] : []);
@@ -874,10 +897,10 @@ function getDietRules(rawDiet, calorieTarget) {
   }
 
   if (filtered.length === 1) {
-    return getSingleDietBlock(filtered[0], calorieTarget) + FOOTER;
+    return getSingleDietBlock(filtered[0], calorieTarget, data) + FOOTER;
   }
 
-  const blocks = filtered.map(d => getSingleDietBlock(d, calorieTarget)).join("\n\n");
+  const blocks = filtered.map(d => getSingleDietBlock(d, calorieTarget, data)).join("\n\n");
   return `COMBINED DIET — user follows ALL of these simultaneously. Apply ALL rules from every diet listed below:
 
 ${blocks}
@@ -965,6 +988,7 @@ function buildContext(data, lang, pairingDays) {
   const dietLabel = filtered.length === 0 ? "no restrictions"
     : filtered.map(d => {
         if (d === "other") return data.diet_other || "custom diet";
+        if (d === "allergy_other") return `allergic to ${data.allergy_other_text || "an unspecified ingredient"}`;
         if (d === "calorie_deficit") return "calorie deficit";
         return d.replace(/_/g, " ");
       }).join(" + ");
@@ -996,7 +1020,7 @@ function buildContext(data, lang, pairingDays) {
   const budgetGuidance = BUDGET_GUIDANCE[budgetLevel];
 
   const kitchenAccessBlock = buildKitchenAccessBlock(data.kitchen);
-  const dietRules = getDietRules(rawDiets, calorieTarget);
+  const dietRules = getDietRules(rawDiets, calorieTarget, data);
 
   const ageStr = data.age ? `, Age: ${data.age}` : "";
   const goalNote = calorieTarget
@@ -1569,7 +1593,7 @@ app.post("/api/auth/verify-session", async (req, res) => {
 const PROFILE_FIELD_MAP = {
   gender: "gender", weight: "weight", dob: "dob", position: "position",
   lunch_bag: "lunchBag", cooking_pref: "cookingPref",
-  diets: "diets", diet_other: "dietOther", goals: "goals",
+  diets: "diets", diet_other: "dietOther", allergy_other_text: "allergyOtherText", goals: "goals",
   calorie_target: "calorieTarget", calorie_deficit_amount: "calorieDeficitAmount",
   calorie_deficit_preset: "calorieDeficitPreset", departure: "departure",
   budget_type: "budgetType", budget_amount: "budgetAmount", kitchen: "kitchen",
