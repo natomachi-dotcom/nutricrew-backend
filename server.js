@@ -2299,6 +2299,12 @@ Route reading examples:
   "YUL CDG NRT" → destinations: ["Paris", "Tokyo"]
   "YYC LAS" → destinations: ["Las Vegas"]
 
+NEVER include the home base itself in "destinations" — it is the departure
+and implicit return, not a stop. If a 3-letter code is genuinely illegible
+(too small, blurry, or cut off), do NOT guess a plausible-sounding city —
+it is better to omit that pairing or leave a destination out than to
+fabricate one from an unreadable code.
+
 IATA → CITY NAME + TIMEZONE REFERENCE
 (Use this table to convert codes to city names and estimate timezone offset)
 
@@ -2765,6 +2771,18 @@ Return ONLY valid JSON with a "pairings" array. If you cannot read the roster cl
     if (u) console.log(`[roster-parse] in=${u.input_tokens} out=${u.output_tokens}`);
 
     const result = extractJSON(message);
+    // Deterministic safety net: the model sometimes lists the home base itself
+    // (a return-to-base leg, e.g. "YYZ-LAX-YYZ") as a destination despite the
+    // prompt's explicit rule against it. Strip any destination that matches
+    // the pairing's own departure city — cheaper and more reliable than
+    // relying on prompt compliance alone.
+    if (Array.isArray(result?.pairings)) {
+      for (const p of result.pairings) {
+        if (!Array.isArray(p.destinations) || !p.departure) continue;
+        const dep = p.departure.trim().toLowerCase();
+        p.destinations = p.destinations.filter(d => (d || "").trim().toLowerCase() !== dep);
+      }
+    }
     res.json(result);
   } catch (err) {
     handleAnthropicError(err, res);
