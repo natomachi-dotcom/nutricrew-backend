@@ -166,7 +166,10 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
 // this every 5 min to prevent Render free-tier cold starts.
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.use(express.json());
+// Default express.json() body limit is 100kb — far too small for the roster
+// upload endpoint, which sends up to 4 base64-encoded photos in one request.
+// A single real phone-camera photo alone can exceed 100kb by 10-50x.
+app.use(express.json({ limit: "8mb" }));
 
 const client = new Anthropic();
 const FAST_MODEL = "claude-haiku-4-5-20251001";
