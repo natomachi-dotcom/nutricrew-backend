@@ -807,7 +807,8 @@ function getSingleDietBlock(diet, calorieTarget, data) {
 - MAX 50g total carbs/day across all meals combined. Add "~Xg carbs" tag to every meal.
 - NO bread, pasta, rice, potatoes, sugar, most fruit (berries ≤50g OK), corn, juice, sweetened drinks.
 - YES: all proteins, non-starchy veg (greens, broccoli, cauliflower, zucchini, peppers), cheese, nuts, seeds, avocado, olive oil.
-- Make up calories from protein and fat. Verify total daily carbs ≤50g.`;
+- Make up calories from protein and fat. Verify total daily carbs ≤50g.
+- Being low-carb is never an excuse to serve a cheese plate, charcuterie board, or cold cured-meat-and-cheese platter as an entire Lunch or Dinner — that's a snack board, not a meal. Build the low-carb main around a cooked protein (steak, chicken, salmon, etc.) plus a cooked non-starchy vegetable side; use cheese/nuts/olives as a garnish or the snack meals, not as the main course itself.`;
     case "dairy_free":
       return `DIET: DAIRY-FREE / MILK ALLERGY — STRICT RULES (milk is one of the most common food-allergy anaphylaxis triggers — treat as zero tolerance, not just a preference):
 - NO dairy: no milk, cheese, butter, cream, yogurt, whey, casein, ghee, or lactose. This includes sheep, goat, and other animal milks, not just cow's milk — cross-reactivity between mammalian milks is common.
@@ -1781,7 +1782,7 @@ app.post("/api/referral/use", async (req, res) => {
 // adding "ingredients" — every previously-cached meal was missing it).
 // Folded into every cache key so old entries become unreachable and get
 // freshly regenerated under the current schema/prompt.
-const CACHE_SCHEMA_VERSION = "v5";
+const CACHE_SCHEMA_VERSION = "v6";
 
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
