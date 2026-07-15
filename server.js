@@ -615,8 +615,14 @@ function escapeRegExp(s) {
 // customAllergyTerm is the crew member's own free-text "Other" allergy (not
 // covered by any fixed ALLERGEN_RULES entry) — matched as a plain whole-word,
 // case-insensitive search since there's no curated banned/qualifier pattern for it.
+// Deliberately excludes meal.tip: several diet-rule blocks (nut_free, egg_free,
+// shellfish_free, soy_free, sesame_free, gluten_free) instruct the model to write
+// a cross-contamination WARNING into "tip" naming the allergen (e.g. "check the
+// label for fish sauce") — that's advisory prose about what to avoid, not a
+// description of what's in the dish, and scanning it made every such warning
+// a false-positive "violation" against itself.
 function findMealAllergenViolations(meal, activeDiets, customAllergyTerm) {
-  const text = [meal.name, meal.description, meal.tip, ...(meal.tags || []), ...(meal.ingredients || [])].filter(Boolean).join(" ");
+  const text = [meal.name, meal.description, ...(meal.tags || []), ...(meal.ingredients || [])].filter(Boolean).join(" ");
   const violations = [];
   for (const diet of activeDiets) {
     const rule = ALLERGEN_RULES[diet];
