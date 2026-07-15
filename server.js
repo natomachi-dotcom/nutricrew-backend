@@ -695,6 +695,68 @@ async function applyAllergenGuard(days, data, ctx) {
   return guardedDays;
 }
 
+// "Dinner should be a substantial main, not an appetizer" survived two rounds
+// of explicit prompt prohibition (including naming "beef carpaccio" directly)
+// and still recurred — especially for low_carb, which pulls toward
+// cheese/cured-meat ingredients that happen to compose into appetizer plates.
+// Same treatment as the allergen guard: a deterministic keyword check +
+// one corrective regeneration pass, rather than relying purely on the prompt.
+const APPETIZER_MEAL_PATTERN = /\b(carpaccio|charcuterie|antipasto|tartare|crudo)\b|\b(cheese|charcuterie|cured meat|cold cuts?)\s+(plate|platter|board)\b|\bprosciutto-wrapped\b/i;
+
+// Only Lunch/Dinner are checked — the same dish (e.g. a cheese plate) is a
+// perfectly normal Snack, and Breakfast has its own separate rules.
+function findMealSubstanceViolation(meal) {
+  if (meal.type !== "Lunch" && meal.type !== "Dinner") return null;
+  const text = [meal.name, meal.description].filter(Boolean).join(" ");
+  const match = text.match(APPETIZER_MEAL_PATTERN);
+  return match ? match[0] : null;
+}
+
+async function regenerateSubstantialMeal(meal, violationTerm, dietRules, kitchenAccessBlock) {
+  const prompt = `Revise this ONE meal — it's an appetizer-scale dish standing in as a full ${meal.type}, which isn't allowed.
+
+ORIGINAL MEAL: ${JSON.stringify({ name: meal.name, description: meal.description })}
+PROBLEM: "${violationTerm}" is an appetizer/small-plate style dish (carpaccio, charcuterie/cheese board, tartare, etc.), not a complete meal.
+
+${dietRules}
+
+${kitchenAccessBlock}
+
+Generate a REPLACEMENT ${meal.type} meal that is a substantial, complete main course — a cooked protein plus a cooked starch/grain/vegetable side, portioned as a full meal — while still complying with the diet and kitchen constraints above, keeping calories close to ${meal.calories} kcal. Include an "ingredients" array listing each distinct ingredient by short name. Return ONLY the meal JSON.`;
+  try {
+    const replacement = await runStructured(prompt, MEAL_SCHEMA, 700, FAST_MODEL);
+    return { ...replacement, type: meal.type };
+  } catch (e) {
+    console.error(`[meal-substance-guard] regeneration failed for "${meal.name}": ${e.message}`);
+    return meal;
+  }
+}
+
+// Deterministic post-generation safety net: checks every Lunch/Dinner meal
+// for the appetizer-as-a-meal pattern and regenerates (once) any violator.
+// Runs on bank hits and cache hits too, since those may predate this guard.
+async function applyMealSubstanceGuard(days, ctx) {
+  let violationCount = 0;
+  const guardedDays = await Promise.all(days.map(async (day) => {
+    if (!day?.meals) return day;
+    const meals = await Promise.all(day.meals.map(async (meal) => {
+      const violationTerm = findMealSubstanceViolation(meal);
+      if (!violationTerm) return meal;
+      violationCount++;
+      console.warn(`[meal-substance-guard] "${meal.name}" (${meal.type}) is appetizer-scale ("${violationTerm}") — regenerating`);
+      const replacement = await regenerateSubstantialMeal(meal, violationTerm, ctx.dietRules, ctx.kitchenAccessBlock);
+      const stillViolating = findMealSubstanceViolation(replacement);
+      if (stillViolating) {
+        console.error(`[meal-substance-guard] "${replacement.name}" STILL appetizer-scale after regeneration — serving anyway, flag for review`);
+      }
+      return replacement;
+    }));
+    return { ...day, meals };
+  }));
+  if (violationCount > 0) console.log(`[meal-substance-guard] corrected ${violationCount} meal(s) across ${days.length} day(s)`);
+  return guardedDays;
+}
+
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
 // Uses actual age if provided, defaults to 35. Height defaults to 170 cm.
 function estimateTDEE(data) {
@@ -1918,8 +1980,9 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         });
       }
       const entry = bankEntries[Math.floor(Math.random() * bankEntries.length)];
-      // Bank entries predate the allergen guard — check them too before serving.
-      const guardedBankDays = await applyAllergenGuard(entry.days, data, ctx);
+      // Bank entries predate the allergen/meal-substance guards — check them too before serving.
+      const allergenGuardedBankDays = await applyAllergenGuard(entry.days, data, ctx);
+      const guardedBankDays = await applyMealSubstanceGuard(allergenGuardedBankDays, ctx);
       // Fire-and-forget: seed the DB cache so repeat requests get fresh AI variety
       storeCachedDays(guardedBankDays, cacheKey)
         .then(r => { if (r.ids?.length) markDaysSeen(email, r.ids); })
@@ -2088,6 +2151,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     }
 
     days = await applyAllergenGuard(days, data, ctx);
+    days = await applyMealSubstanceGuard(days, ctx);
 
     const extras = await extrasPromise;
 
