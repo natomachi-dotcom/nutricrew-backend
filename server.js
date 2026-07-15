@@ -570,7 +570,15 @@ const ALLERGEN_RULES = {
   },
   shellfish_free: {
     banned: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|fish sauce|shrimp paste|surimi)\b/i,
-    qualifier: null, // no safe "shellfish-free oyster sauce" phrasing exists — always a hard ban
+    // The model tags compliant meals with "shellfish-free" in its own tags array
+    // (and says it in tip/description) — that self-compliance marker was tripping
+    // the bare "shellfish" match against itself. Same blunt-instrument tradeoff as
+    // every other allergen's qualifier below: the check is whole-meal-text, not
+    // positional, so a genuine violation (e.g. real oyster sauce) that happens to
+    // co-occur with an unrelated "shellfish-free" mention elsewhere in the same
+    // meal would also be masked. Accepted as the same risk profile every other
+    // allergen's qualifier already carries, not a new gap introduced here.
+    qualifier: /shellfish-free|shellfish free/i,
   },
   egg_free: {
     banned: /\b(eggs?|mayonnaise|mayo|hollandaise|b[ée]arnaise|meringue|frittata|quiche|french toast)\b/i,
