@@ -2,7 +2,7 @@
   "version": 1,
   "generated": "2026-07-02T17:15:29.652Z",
   "plans": {
-    "none|none|none|full_kitchen|none|none|en": [
+    "none|v3|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This nutrition plan provides balanced macronutrients and sustained energy through protein-rich meals and whole grains, essential for maintaining alertness and cognitive function during flight operations. The variety of antioxidant-rich vegetables, omega-3 fatty acids from salmon, and probiotics from Greek yogurt supports immune function and gut health during the physiological stress of crew scheduling.",
@@ -140,7 +140,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store all proteins (eggs, chicken, salmon) at 40°F or below and consume within recommended timeframes—eggs within 3-4 weeks, raw poultry within 1-2 days, and fresh fish within 1-2 days of purchase. Pack perishables in insulated containers with ice packs if transporting between duty stations to maintain food safety. Wash all produce thoroughly under running water before consumption, especially leafy greens and vegetables, to reduce foodborne illness risk. Prepare egg and seafood dishes immediately before consumption rather than preparing ahead, as these items are highly perishable and pose health risks if left at room temperature for extended periods."
         }
-      },
+      }
+    ],
+    "none|v3|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This 2-day nutrition plan provides balanced macronutrients and sustained energy through whole grains, lean proteins, and nutrient-dense foods essential for maintaining alertness and cognitive function during flight operations. The variety of meals supports stable blood sugar levels, optimal hydration, and recovery, while emphasizing foods that minimize digestive disruption common in aviation crews.",
@@ -390,7 +392,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Pack perishables in insulated containers with ice packs, keeping dairy and proteins below 40°F (4°C) throughout the 2-day pairing. Consume fresh berries, yogurt, and prepared salads within 24 hours of preparation; store in airtight containers to prevent bacterial growth. Pre-portion energy balls and snacks before the pairing to minimize food handling during flight duty and reduce cross-contamination risk. Avoid foods requiring refrigeration on layovers without guaranteed access to crew facilities; prioritize shelf-stable options like nuts, crackers, and dried fruit for emergency nutrition if refrigeration fails."
         }
-      },
+      }
+    ],
+    "none|v3|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This 3-day nutrition plan provides balanced macronutrients with high-quality proteins, healthy fats, and complex carbohydrates to maintain steady energy levels and cognitive performance during flight operations. The variety of whole foods supports sustained alertness, muscle recovery, and stable blood sugar—critical for crew safety and well-being during multi-day pairings.",
@@ -738,7 +742,7 @@
         }
       }
     ],
-    "none|none|none|hotel_no_kitchen|none|none|en": [
+    "none|v3|none|none|hotel_no_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This balanced 1-day crew nutrition plan delivers sustained energy through a mix of complex carbohydrates, lean proteins, and healthy fats, supporting alertness and recovery during flight operations. The no-cook requirement ensures meals are quick, stress-free, and safe to consume in hotel room settings without compromising nutritional quality.",
@@ -881,7 +885,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all perishables (yogurt, cheese, salmon, turkey, avocado) in hotel mini-fridge at 4°C or below; consume within 24 hours of refrigeration. Verify pre-made salmon and turkey were prepared within 48 hours and maintain cold chain during transport. Wash apples and produce under running water before consumption, and use separate cutting surfaces if preparing wraps in-room. Pack a small cooler bag with ice packs when traveling between hotel and airport to maintain food safety during the 1-day mission."
         }
-      },
+      }
+    ],
+    "none|v3|none|none|hotel_no_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This nutrition plan provides balanced, nutrient-dense meals that support sustained energy and cognitive function for flight crew without requiring any cooking—critical for hotel room constraints. The combination of protein, healthy fats, and complex carbohydrates minimizes fatigue and maintains stable blood sugar during the 2-day pairing.",
@@ -1116,7 +1122,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all dairy products, deli meats, and smoked salmon refrigerated below 40°F (4°C) and consume within 2 days of purchase. Pack perishables with ice packs in an insulated bag for transport between flights. Pre-made meals should be ordered from the hotel room service with confirmed freshness and delivery timing to avoid temperature abuse. Inspect all packaged items for intact seals and expiration dates before consumption, especially protein bars and trail mix for mold or off-odors from humidity exposure."
         }
-      },
+      }
+    ],
+    "none|v3|none|none|hotel_no_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This no-cook hotel room nutrition plan provides balanced macronutrients and sustained energy through pre-made proteins, whole grains, and healthy fats—essential for managing fatigue and maintaining cognitive performance during flight operations. The meal variety ensures crew members meet caloric and micronutrient needs while accommodating the constraint of limited kitchen facilities.",
@@ -1468,7 +1476,7 @@
         }
       }
     ],
-    "vegetarian|none|none|full_kitchen|none|none|en": [
+    "vegetarian|v3|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegetarian nutrition plan provides sustained energy and cognitive support through balanced macronutrients, fiber-rich whole grains, and plant-based proteins essential for maintaining focus during flight duties. The meals are designed to prevent fatigue, stabilize blood sugar, and support digestive health during irregular flight schedules and time zone changes.",
@@ -1623,7 +1631,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Pack perishables like Greek yogurt, feta, and tofu in an insulated cooler with ice packs to maintain freshness during the 1-day pairing and prevent bacterial growth. Pre-chop vegetables and store them in airtight containers refrigerated for no longer than 6 hours before consumption to retain nutritional value. Prepare energy balls and granola parfaits ahead of time and store in cool, dry conditions or refrigeration to avoid spoilage during crew rest periods. Always check expiration dates on nuts, seeds, and grains before departure, as rancid foods can cause digestive distress during flight operations."
         }
-      },
+      }
+    ],
+    "vegetarian|v3|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegetarian nutrition plan provides sustained energy and mental clarity through balanced macronutrients, complex carbohydrates, and protein-rich sources essential for maintaining alertness during flight operations. The emphasis on whole grains, legumes, and antioxidant-rich vegetables supports cardiovascular health and reduces fatigue common in aviation crew scheduling.",
@@ -1879,7 +1889,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store perishables (yogurt, cottage cheese, feta, eggs, tofu) at 4°C or below and consume within 3-4 days to prevent foodborne illness during brief crew pairings. Keep raw vegetables separate from cooked items and wash all produce under running water before consumption to minimize contamination risk. Inspect eggs for cracks and discard any with signs of deterioration before use; store in original carton away from strong-smelling foods. Pack non-perishables in airtight containers and maintain a 'first in, first out' rotation to ensure freshness and food safety compliance."
         }
-      },
+      }
+    ],
+    "vegetarian|v3|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This vegetarian nutrition plan provides sustained energy and mental clarity for aviation crews through protein-rich legumes, whole grains, and healthy fats that stabilize blood sugar during irregular flight schedules. The variety of whole-food meals and nutrient-dense snacks supports cognitive function, reduces fatigue, and maintains digestive health during multi-day pairings.",
@@ -2248,7 +2260,7 @@
         }
       }
     ],
-    "vegetarian|none|none|hotel_no_kitchen|none|none|en": [
+    "vegetarian|v3|none|none|hotel_no_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegetarian 1-day crew nutrition plan provides sustained energy through balanced macronutrients, combining complex carbohydrates, plant-based proteins, and healthy fats to maintain stable blood sugar and alertness during flight operations. All meals require no cooking and use shelf-stable or refrigerated items accessible in hotel rooms, ensuring crew can prepare nutritious food quickly without kitchen facilities.",
@@ -2387,7 +2399,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep yogurt, hummus, cheese, and pre-made wraps refrigerated below 4°C; consume Greek yogurt parfait and Caprese salad within 4-6 hours of assembly to prevent bacterial growth. Store nuts, dried fruit, and dark chocolate trail mix in airtight containers away from heat and humidity to maintain freshness for the 24-hour period. Inspect all pre-packaged items for damage or expiration dates before hotel room storage, particularly hummus and other refrigerated spreads. Assemble cold meals only when ready to eat or within 2 hours before consumption; keep ingredients separated until final assembly to maximize freshness and food safety."
         }
-      },
+      }
+    ],
+    "vegetarian|v3|none|none|hotel_no_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegetarian crew nutrition plan prioritizes sustained energy and hydration through nutrient-dense, no-cook meals that support alertness during flight operations while accommodating hotel room preparation limitations. The varied protein sources (Greek yogurt, legumes, nuts, cheese) and abundance of whole grains and vegetables provide stable blood sugar and cognitive function essential for aviation crew safety.",
@@ -2649,7 +2663,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all perishables (Greek yogurt, fresh cheese, pre-made hummus) in hotel mini-fridge at 4°C or below and consume within 24 hours of opening. Pack a small insulated bag with ice packs for any meals transported between hotel and airport to maintain cold chain integrity. Inspect all pre-packaged items for tamper seals and expiration dates before consumption, and wash all raw vegetables thoroughly before eating."
         }
-      },
+      }
+    ],
+    "vegetarian|v3|none|none|hotel_no_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This vegetarian crew nutrition plan prioritizes nutrient-dense, shelf-stable meals requiring zero cooking—perfect for hotel room confinement and maintaining steady energy during multi-day pairings. The balanced combination of plant proteins (legumes, yogurt, nuts), complex carbohydrates, and healthy fats supports sustained cognitive performance and reduces fatigue-related decision-making errors.",
@@ -3001,7 +3017,7 @@
         }
       }
     ],
-    "vegan|none|none|full_kitchen|none|none|en": [
+    "vegan|v3|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegan crew nutrition plan delivers sustained energy through plant-based proteins (tofu, chickpeas, lentils) and complex carbohydrates, essential for maintaining alertness during flight operations. The balanced macronutrient distribution with healthy fats from almonds and nutrient-dense whole grains supports cognitive function, stable blood sugar, and physical endurance throughout your duty day.",
@@ -3144,7 +3160,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store tofu in the coldest part of your refrigerator and keep it sealed in water, replacing water daily to maximize freshness for 5–7 days. Prepare lentils and quinoa in batches the night before and refrigerate in airtight containers to prevent bacterial growth and ensure food safety during your duty period. Keep almond butter and dates in sealed containers away from direct sunlight and heat, as they can develop rancidity; verify they have a 2–3 week shelf life minimum before purchase. Wash all fresh produce thoroughly under running water before storage and keep vegetables in separate compartments to prevent cross-contamination and premature spoilage."
         }
-      },
+      }
+    ],
+    "vegan|v3|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegan nutrition plan provides sustained energy through protein-rich plant-based sources like tofu, legumes, and nuts, essential for maintaining focus and alertness during flight operations. The balanced combination of complex carbohydrates, healthy fats, and fiber supports stable blood sugar levels and digestive health during irregular crew schedules.",
@@ -3400,7 +3418,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store tofu in airtight containers submerged in water and consume within 3 days of opening. Keep canned legumes sealed until use and transfer opened portions to glass containers; consume within 2 days. Pack nut butters and seeds in cool, dark conditions as they are prone to oxidation; check for off-smells before consumption. Pre-cut vegetables should be stored in breathable containers with paper towels to manage moisture and consumed within 2 days to prevent spoilage."
         }
-      },
+      }
+    ],
+    "vegan|v3|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This fully vegan nutrition plan provides sustained energy, stable blood sugar, and optimal hydration for flight crew through plant-based proteins, complex carbohydrates, and nutrient-dense whole foods that support circadian rhythm management and reduce digestive stress during irregular schedules. The emphasis on fiber-rich legumes, healthy fats from nuts and seeds, and antioxidant-rich vegetables enhances cognitive function, reduces fatigue, and supports immune health during the physiological demands of aviation duty.",
@@ -3792,7 +3812,7 @@
         }
       }
     ],
-    "vegan|none|none|hotel_no_kitchen|none|none|en": [
+    "vegan|v3|none|none|hotel_no_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegan crew nutrition plan provides sustained energy and hydration through whole-food carbohydrates, plant-based proteins, and healthy fats—essential for maintaining alertness and cognitive function during flight operations. The no-cook requirement ensures meals are logistically simple for hotel room preparation, minimizing food safety risks while meeting strict dietary requirements.",
@@ -3944,7 +3964,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all prepared meals and fresh produce refrigerated below 40°F (4°C); discard any items left unrefrigerated for over 2 hours. Consume overnight oats and prepared bowls within 24 hours of assembly to prevent bacterial growth and ingredient separation. Pack pre-made meals in insulated containers with ice packs for crew transport between hotel and airport. Verify hotel mini-fridge capacity before shopping; if space is limited, request room temperature shelf-stable items (crackers, nuts, dried fruit, nut butters) and prepare fresh components daily from whole ingredients."
         }
-      },
+      }
+    ],
+    "vegan|v3|none|none|hotel_no_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegan crew nutrition plan provides balanced macronutrients with plant-based proteins, complex carbohydrates, and healthy fats to support energy levels and alertness during 2-day pairings without requiring kitchen facilities. All meals are no-cook or pre-made, designed for easy consumption in hotel rooms and during crew rest periods while maintaining consistent blood sugar and sustained energy.",
@@ -4208,7 +4230,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Always refrigerate prepared meals (overnight oats, chia pudding, tofu salad) immediately and consume within 24 hours to prevent bacterial growth; pack an insulated lunch bag with ice packs for meals consumed outside the hotel. Keep raw produce (apples, carrots, cucumber) separate from prepared dishes to minimize cross-contamination and maintain freshness. Check all packaged items (hummus, marinara, plant-based products) for their expiration dates upon purchase and before consumption, especially important during fatigue-prone crew rest periods when food safety vigilance may lapse. Store nuts, seeds, and dried fruits in sealed containers away from humidity to prevent mold or rancidity, and consume opened packages within 3-5 days to ensure nutritional integrity and food safety."
         }
-      },
+      }
+    ],
+    "vegan|v3|none|none|hotel_no_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This plant-based crew nutrition plan provides sustained energy, stable blood sugar, and easy-to-digest meals that support alertness and minimize gastrointestinal stress during flight operations. All meals require zero cooking and utilize shelf-stable or refrigerated items ideal for hotel room consumption, ensuring compliance with rest protocols and fatigue management standards.",
@@ -4582,7 +4606,7 @@
         }
       }
     ],
-    "gluten_free|none|none|full_kitchen|none|none|en": [
+    "gluten_free|v3|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This gluten-free crew nutrition plan provides sustained energy through complex carbohydrates, lean proteins, and healthy fats essential for maintaining alertness during flight operations. The nutrient-dense meals support cognitive function, stable blood sugar, and digestive comfort during irregular scheduling and time zone changes.",
@@ -4741,7 +4765,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Prepare all meals within 2 hours of consumption to maintain freshness and food safety during short crew pairings; store prepared meals in airtight containers at 40°F or below. Pre-portion grains and proteins the night before to avoid galley preparation delays and ensure consistent meal timing aligned with circadian rhythm management. Verify all packaged items carry gluten-free certification and check for cross-contamination warnings, especially with shared cooking surfaces if catering facilities are used. Stay hydrated with minimum 2.5 liters of water daily to offset cabin dehydration and maintain digestive function alongside this fiber-rich meal plan."
         }
-      },
+      }
+    ],
+    "gluten_free|v3|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This strictly gluten-free nutrition plan provides balanced macronutrients and sustained energy through complex carbohydrates, lean proteins, and healthy fats—essential for maintaining alertness and cognitive function during flight operations. The diverse meal options support stable blood sugar levels and include nutrient-dense foods that promote recovery and reduce fatigue during multi-day crew pairings.",
@@ -4989,7 +5015,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "1) Store all proteins properly: keep salmon and ground meats refrigerated at 0-4°C and consume within 48 hours for safety during 2-day pairings. 2) Prevent cross-contamination: use separate cutting boards and utensils for gluten-free prep; wash hands thoroughly before handling gluten-free foods and after touching other surfaces. 3) Prepare and portion meals ahead: pre-cook grains and proteins the evening before to minimize galley prep time and ensure food freshness. 4) Pack perishables in insulated crew bags with ice packs if transporting between locations; keep dried goods and gluten-free pantry items sealed to prevent contamination and moisture absorption."
         }
-      },
+      }
+    ],
+    "gluten_free|v3|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This strictly gluten-free nutrition plan provides balanced macronutrients and sustained energy for aviation crew through whole proteins, complex carbohydrates, and healthy fats across 15 diverse meals and snacks. The home kitchen preparation ensures complete control over cross-contamination risks while supporting alertness, digestion, and hydration critical for flight operations.",
@@ -5346,7 +5374,7 @@
         }
       }
     ],
-    "gluten_free|none|none|hotel_no_kitchen|none|none|en": [
+    "gluten_free|v3|none|none|hotel_no_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This gluten-free crew nutrition plan delivers sustained energy and stable blood sugar throughout a 1-day pairing using whole proteins, complex carbohydrates, and healthy fats—essential for maintaining alertness and cognitive function during flight operations. The no-cook requirement ensures meal safety and convenience in hotel room settings while meeting strict gluten-free standards to prevent digestive issues that could compromise crew performance.",
@@ -5489,7 +5517,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store all pre-cooked proteins and dairy in hotel room refrigerator immediately upon arrival; consume grilled chicken and salmon within 24 hours to prevent foodborne illness. Keep dry pantry items (oats, granola, almonds, honey) sealed in airtight containers away from humidity to maintain freshness and prevent cross-contamination. Verify all packaged foods display certified gluten-free labeling and check ingredient lists for hidden gluten sources like modified food starch or soy sauce. Consume meals in this order: grab-and-go items first (yogurt, cheese, apple), then assembled cold meals (salad, oatmeal), reserving pre-cooked proteins for final meals to minimize refrigeration time."
         }
-      },
+      }
+    ],
+    "gluten_free|v3|none|none|hotel_no_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This gluten-free crew nutrition plan delivers sustained energy and stable blood sugar across 2 days using portable, no-cook meals rich in protein and complex carbohydrates—essential for maintaining alertness during flight operations. The strategic combination of omega-3 sources, lean proteins, and whole grains supports cognitive function and fatigue management while accommodating strict celiac requirements without requiring kitchen facilities.",
@@ -5735,7 +5765,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store all perishables (salmon, chicken, turkey, dairy, pre-cooked grains) in insulated cooler bags with ice packs at 40°F or below; discard anything left unrefrigerated for more than 2 hours. Pre-portion meals into airtight glass containers or resealable bags immediately upon hotel arrival to prevent cross-contamination from shared kitchen surfaces. Verify all packaged gluten-free products (granola, rice cakes, tortillas, soy sauce) display certified GF labeling and check ingredient lists for wheat-derived additives or shared processing facility warnings. Consume opened dairy and proteins within 24 hours; rely on shelf-stable items (nuts, rice cakes, almond butter) for backup meals if refrigeration fails during layover."
         }
-      },
+      }
+    ],
+    "gluten_free|v3|none|none|hotel_no_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This gluten-free nutrition plan is specifically designed for aviation crew operating from hotel rooms without cooking facilities, providing nutrient-dense, pre-made or cold-assembled meals that maintain steady energy and cognitive function during multi-day operations. The balanced macronutrient distribution across protein, complex carbohydrates, and healthy fats supports circadian rhythm management and prevents fatigue-related performance degradation common in aviation roles.",
@@ -6088,7 +6120,7 @@
         }
       }
     ],
-    "halal|none|none|full_kitchen|none|none|en": [
+    "halal|v3|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This halal-certified nutrition plan provides sustained energy and cognitive function through balanced proteins, complex carbohydrates, and healthy fats essential for crew alertness and recovery. The diverse meal options support hydration, cardiovascular health, and stable blood sugar levels critical for managing flight fatigue and stress.",
@@ -6232,7 +6264,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Prepare shakshuka and salmon the morning of departure to consume within 4 hours; store in insulated container with ice packs. Wash all raw vegetables thoroughly and refrigerate crudités in sealed containers until 2 hours before consumption. Verify all packaged items including tahini, hummus, and honey display halal certification symbols before purchasing. Pack yogurt and berries in a separate cooler compartment away from raw proteins to prevent cross-contamination during transport."
         }
-      },
+      }
+    ],
+    "halal|v3|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This Halal-certified 2-day nutrition plan provides sustained energy through balanced macronutrients, complex carbohydrates, and high-quality proteins essential for maintaining alertness and cognitive function during flight operations. The diverse meal options ensure crew members remain properly hydrated and nourished while adhering to strict Halal dietary requirements throughout their pairing.",
@@ -6489,7 +6523,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store all proteins in separate sealed containers at or below 40°F (4°C) and consume within 2 days to prevent foodborne illness. Pre-cut vegetables should be stored in airtight containers and used within 24 hours; keep whole produce separate from cut items. Prepare shakshuka and curries fresh on each day rather than storing overnight to maximize food safety and nutritional quality. Always verify Halal certification labels on packaged items at purchase, and keep raw and cooked foods completely separated during storage and meal preparation."
         }
-      },
+      }
+    ],
+    "halal|v3|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This halal-certified crew nutrition plan provides balanced macronutrients from lean proteins, whole grains, and healthy fats to support sustained energy and cognitive function during flight operations. The nutrient-dense, anti-inflammatory meals featuring Mediterranean and Middle Eastern ingredients promote digestive health, stable blood sugar, and optimal hydration—critical factors for maintaining alertness and physical performance across multiple duty days.",
@@ -6846,7 +6882,7 @@
         }
       }
     ],
-    "halal|none|none|hotel_no_kitchen|none|none|en": [
+    "halal|v3|none|none|hotel_no_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This halal-compliant nutrition plan provides high-protein, nutrient-dense meals optimized for crew alertness and sustained energy across a 1-day pairing, with all items requiring no cooking and suitable for hotel room preparation. The mix of lean proteins, healthy fats, and whole grains supports cardiovascular health and stable blood sugar while adhering strictly to halal dietary requirements.",
@@ -6992,7 +7028,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all perishable proteins and dairy products in the hotel room refrigerator below 4°C; discard any chicken or lamb items left unrefrigerated for more than 2 hours. Verify all pre-packaged items display halal certification marks before purchase and check expiration dates, especially for yogurt and cheese which typically have 5-7 day shelf lives. Assemble wraps and salads immediately before eating to prevent sogginess and bacterial growth; prepare no more than 30 minutes in advance. Use clean utensils, cutting boards, and hands when handling halal proteins to prevent cross-contamination."
         }
-      },
+      }
+    ],
+    "halal|v3|none|none|hotel_no_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This halal crew nutrition plan delivers sustained energy through protein-rich meals and complex carbohydrates without requiring any cooking facilities, perfect for hotel room preparation during 2-day pairings. The balanced mix of chicken, lamb, fish, and beef with fresh vegetables and whole grains supports cognitive function and reduces fatigue during flight operations.",
@@ -7244,7 +7282,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all pre-cooked proteins (chicken, lamb, fish, sausage, boiled eggs) in hotel minibar or ice bucket immediately upon delivery; consume within 24 hours of purchase. Verify halal certification on all packaged items before purchasing, especially pre-made dips and wraps. Wash all fresh produce thoroughly with bottled water if destination water quality is questionable. Segregate raw vegetables from cooked proteins using separate containers to prevent cross-contamination and maintain food safety during the 2-day pairing."
         }
-      },
+      }
+    ],
+    "halal|v3|none|none|hotel_no_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This halal-certified 3-day crew nutrition plan provides balanced meals with lean proteins, complex carbohydrates, and healthy fats to maintain energy and focus during flight operations while accommodating no-cooking hotel room constraints. The pre-made and cold-assembled options minimize preparation time and food safety risks, allowing crews to prioritize rest and recovery between duty periods.",
@@ -7600,7 +7640,7 @@
         }
       }
     ],
-    "lactose_free|none|none|full_kitchen|none|none|en": [
+    "lactose_free|v3|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This lactose-free nutrition plan provides sustained energy and cognitive support through balanced macronutrients, whole grains, lean proteins, and healthy fats essential for aviation crew stamina and alertness. The meals are strategically timed to maintain stable blood glucose levels and prevent fatigue during flight operations while respecting dietary restrictions.",
@@ -7749,7 +7789,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store salmon and chicken in the coldest section of refrigerator and consume within 1-2 days of purchase. Keep prepared energy balls sealed in an airtight container and refrigerate if prepared in advance to prevent spoilage in warm cabin conditions. Wash all produce thoroughly before consumption and pack cut fruits (apple slices) in an airtight container with lemon juice to prevent oxidation. Transport all perishables in an insulated cooler bag with ice packs during crew deadheads to maintain food safety and prevent bacterial growth."
         }
-      },
+      }
+    ],
+    "lactose_free|v3|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This lactose-free nutrition plan provides sustained energy and recovery support for flight crews through nutrient-dense whole foods, lean proteins, and complex carbohydrates that stabilize blood sugar during circadian disruptions. The emphasis on omega-3 rich fish, antioxidant-packed berries, and easily digestible meals supports cognitive function and reduces gastrointestinal stress common in aviation environments.",
@@ -8007,7 +8049,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store all proteins on the coldest shelf of your cooler or refrigerator and consume within 48 hours to prevent foodborne illness in crew rest environments. Wash all fresh produce thoroughly upon arrival and store separately from raw proteins to avoid cross-contamination during meal prep. Pack ice packs or use thermoelectric coolers when transiting between flights to maintain proper temperature control for perishable items. Prepare grains (quinoa, brown rice) in advance where possible and store in airtight containers to extend shelf life and reduce galley preparation time during duty periods."
         }
-      },
+      }
+    ],
+    "lactose_free|v3|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This lactose-free nutrition plan provides sustained energy and cognitive performance for aviation crews through balanced macronutrients, complex carbohydrates, and omega-3 rich proteins essential for managing circadian disruption and fatigue. The mix of whole grains, lean proteins, healthy fats, and antioxidant-rich produce supports cardiovascular health, stable blood sugar, and mental clarity during demanding flight schedules.",
@@ -8375,7 +8419,7 @@
         }
       }
     ],
-    "lactose_free|none|none|hotel_no_kitchen|none|none|en": [
+    "lactose_free|v3|none|none|hotel_no_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This lactose-free, no-cook nutrition plan provides balanced macronutrients and sustained energy throughout the day, essential for maintaining alertness and cognitive function during flight operations. The emphasis on pre-packaged, ready-to-eat meals maximizes convenience in hotel room constraints while delivering whole grains, lean protein, healthy fats, and antioxidant-rich fruits and vegetables.",
@@ -8516,7 +8560,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store pre-cooked proteins (chicken, salmon) at 4°C or below and consume within 24 hours to prevent bacterial growth. Pack items in insulated containers with ice packs if traveling between hotel and airport. Inspect all packaged items for intact seals and expiration dates before purchase. Wash fresh produce thoroughly even if pre-cut, and consume cut fruits and vegetables within 4-6 hours or refrigerate immediately."
         }
-      },
+      }
+    ],
+    "lactose_free|v3|none|none|hotel_no_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This lactose-free, no-cook meal plan is optimized for aviation crew maintaining stable energy and hydration during 2-day pairings while working with hotel room constraints. All meals are pre-made, cold-assembled, or ordered, ensuring consistent nutrition without kitchen equipment and reducing fatigue-related food preparation stress.",
@@ -8781,7 +8827,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all pre-cooked salmon and prepared salads in hotel room refrigerator at 4°C and consume within 24 hours; check expiration dates on packaged items upon arrival. Verify hotel room has functioning refrigerator and mini-cooler; if not, request ice service to maintain cold chain for perishables like salmon and fresh produce. All raw vegetables (crudités, salad bases) should be washed and stored in sealed containers; consume within 36 hours to prevent wilting and bacterial growth during 2-day layover. Maintain food separation: keep nuts and granola in sealed bags away from moisture to prevent rancidity and mold, especially in humid climates."
         }
-      },
+      }
+    ],
+    "lactose_free|v3|none|none|hotel_no_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This lactose-free crew nutrition plan emphasizes nutrient-dense, pre-packaged and cold-assembly meals that require no cooking, perfect for hotel room preparation during layovers. The balanced combination of lean proteins, complex carbohydrates, healthy fats, and antioxidant-rich produce supports sustained energy, mental clarity, and recovery for aviation professionals.",
@@ -9130,7 +9178,7 @@
         }
       }
     ],
-    "low_carb|none|none|full_kitchen|none|none|en": [
+    "low_carb|v3|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This low-carb crew nutrition plan stabilizes blood sugar and energy levels during flight operations, supporting sustained focus and alertness throughout the day. The protein-rich meals with healthy fats and nutrient-dense vegetables optimize cognitive function and reduce fatigue common in aviation crews.",
@@ -9271,7 +9319,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store salmon and chicken thighs in the coldest part of your cooler with ice packs, keeping them below 4°C until cooking. Prepare vegetables (Brussels sprouts, salad greens) the morning of consumption and store in airtight containers to maintain freshness and prevent wilting. Keep string cheese and almond butter in cool storage; if traveling, use insulated packaging with ice packs to prevent spoilage during transport. Prepare the tahini dressing immediately before meal service and store unused portions in the refrigerator for no more than 3 days."
         }
-      },
+      }
+    ],
+    "low_carb|v3|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This low-carb nutrition plan stabilizes blood sugar and energy levels during 2-day crew pairings, reducing fatigue and supporting consistent cognitive performance during flight operations. The protein-rich, whole-food approach with minimal processed carbohydrates aligns with aviation crew health protocols that emphasize sustained alertness and metabolic stability.",
@@ -9513,7 +9563,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Store perishable proteins (salmon, ground meats, bacon) in the coldest section of the refrigerator and use within 1-2 days to prevent spoilage during brief crew rest periods. Keep eggs separated and store at consistent temperature; discard any cracked eggs before packing. Wash all produce thoroughly under running water immediately upon purchase and store in sealed containers to maintain freshness and minimize bacterial contamination during overnight stops. Transport dairy products in an insulated bag with ice packs if traveling between hotel and crew quarters; cheese and cream cheese can be safely stored up to 3 days once opened if kept below 40°F."
         }
-      },
+      }
+    ],
+    "low_carb|v3|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This low-carb crew nutrition plan maintains stable blood glucose and energy levels during flight operations while emphasizing protein and healthy fats to support alertness and recovery. The meal variety and portion-controlled snacks prevent energy crashes common in aviation schedules while staying well under 100g net carbs daily.",
@@ -9865,7 +9917,7 @@
         }
       }
     ],
-    "low_carb|none|none|hotel_no_kitchen|none|none|en": [
+    "low_carb|v3|none|none|hotel_no_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This low-carb crew nutrition plan delivers sustained energy and mental clarity through protein-rich, nutrient-dense meals requiring zero cooking—ideal for hotel room preparation during tight crew schedules. Each meal maintains stable blood sugar and supports alertness during flight operations while accommodating the constraints of limited kitchen facilities.",
@@ -10002,7 +10054,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep all items in hotel mini-fridge at 4°C (40°F) or below; consume dairy, salmon, and poultry within 24 hours of purchase. Pack prepared meals in airtight containers and request ice packs from hotel if traveling between locations. Wash hands thoroughly before assembling cold meals and avoid cross-contamination between smoked salmon and other items. Inspect all packaged proteins for damage and expiration dates upon hotel arrival before storage."
         }
-      },
+      }
+    ],
+    "low_carb|v3|none|none|hotel_no_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This low-carb, no-cook hotel room nutrition plan maintains stable blood sugar and sustained energy for flight crews by emphasizing protein-rich, fat-based meals that require zero kitchen equipment and pack efficiently. Pre-assembled meals and cold preparations minimize digestive load during flight cycles while meeting strict carbohydrate limits under 100g net carbs daily.",
@@ -10244,7 +10298,9 @@
           "destination": "Destination not specified for this plan. Check local customs rules on arrival for any items in your grocery list.",
           "general": "Keep perishables (smoked salmon, shrimp, deli meats, cream cheese, mozzarella) in hotel mini-fridge below 4°C and consume within 24 hours of purchase; mark opened items with time/date. Pre-cooked rotisserie chicken should be consumed within 2 days; discard if any off-odors develop. Transport eggs, dairy, and proteins in an insulated crew bag with ice packs during layovers; never leave perishables unrefrigerated for more than 2 hours. Verify hotel room has functioning refrigeration upon arrival and request ice replenishment daily if needed."
         }
-      },
+      }
+    ],
+    "low_carb|v3|none|none|hotel_no_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This low-carb nutrition plan keeps blood sugar stable and energy consistent during 3-day crew pairings, critical for maintaining alertness and sleep quality in irregular schedules. All meals require no cooking and use shelf-stable or hotel-sourced items, making preparation effortless in limited hotel room kitchens while delivering high-quality protein and healthy fats for sustained performance.",
