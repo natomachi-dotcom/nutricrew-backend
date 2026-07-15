@@ -1780,7 +1780,7 @@ app.post("/api/referral/use", async (req, res) => {
 // adding "ingredients" — every previously-cached meal was missing it).
 // Folded into every cache key so old entries become unreachable and get
 // freshly regenerated under the current schema/prompt.
-const CACHE_SCHEMA_VERSION = "v3";
+const CACHE_SCHEMA_VERSION = "v4";
 
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
