@@ -1251,23 +1251,26 @@ ${DISCLAIMER}`);
 // not just the country where that food is "used". The UNION of all bans applies
 // to packed/carried items; locally-purchased same-stop food stays unrestricted.
 
+// name/carriedBans are {en, fr, es} — buildCarriedFoodPromptBlock (feeds the
+// AI prompt) always uses .en; buildCarriedFoodNote (feeds the user-facing
+// foodRestrictions.carried field) uses the crew member's selected language.
 const BORDER_COUNTRY_RULES = [
   {
     id: "australia",
-    name: "Australia (DAFF biosecurity)",
+    name: { en: "Australia (DAFF biosecurity)", fr: "Australie (biosécurité DAFF)", es: "Australia (bioseguridad DAFF)" },
     codes: ["SYD","MEL","BNE","PER","ADL","CBR","OOL","CNS","DRW","HBA","TSV","MKY","ROK","LST"],
     carriedBans: [
-      "Fresh or dried fruit of any kind",
-      "Fresh or dried vegetables of any kind",
-      "Meat, poultry, or seafood (unless commercially heat-treated and sealed)",
-      "Eggs or egg products (unless commercially sealed/pasteurized)",
-      "Seeds and nuts (unless commercially sealed/packaged)",
-      "Any unpackaged plant material",
+      { en: "Fresh or dried fruit of any kind", fr: "Fruits frais ou séchés, de toute sorte", es: "Fruta fresca o seca de cualquier tipo" },
+      { en: "Fresh or dried vegetables of any kind", fr: "Légumes frais ou séchés, de toute sorte", es: "Verduras frescas o secas de cualquier tipo" },
+      { en: "Meat, poultry, or seafood (unless commercially heat-treated and sealed)", fr: "Viande, volaille ou fruits de mer (sauf traités thermiquement et scellés commercialement)", es: "Carne, aves o mariscos (a menos que estén tratados térmicamente y sellados comercialmente)" },
+      { en: "Eggs or egg products (unless commercially sealed/pasteurized)", fr: "Œufs ou produits à base d'œufs (sauf scellés/pasteurisés commercialement)", es: "Huevos o productos con huevo (a menos que estén sellados/pasteurizados comercialmente)" },
+      { en: "Seeds and nuts (unless commercially sealed/packaged)", fr: "Graines et noix (sauf scellées/emballées commercialement)", es: "Semillas y frutos secos (a menos que estén sellados/empaquetados comercialmente)" },
+      { en: "Any unpackaged plant material", fr: "Tout matériel végétal non emballé", es: "Cualquier material vegetal sin empaquetar" },
     ],
   },
   {
     id: "usa",
-    name: "USA (CBP/USDA)",
+    name: { en: "USA (CBP/USDA)", fr: "États-Unis (CBP/USDA)", es: "Estados Unidos (CBP/USDA)" },
     usaFlagTrigger: true,
     codes: [
       "JFK","LAX","ORD","ATL","DFW","DEN","SFO","SEA","MIA","BOS","IAD","IAH",
@@ -1278,27 +1281,27 @@ const BORDER_COUNTRY_RULES = [
       "BHM","TUS","ELP","STL",
     ],
     carriedBans: [
-      "Any fresh fruit (apples, oranges, mangoes, bananas, grapes, berries, citrus, stone fruits, etc.)",
-      "Any fresh vegetable (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)",
-      "Raw or undercooked meat, poultry, or seafood",
-      "Raw eggs or hard-boiled eggs in the shell",
-      "Unpasteurized dairy or soft fresh cheese in unsealed containers",
-      "Fresh herbs with roots or soil",
+      { en: "Any fresh fruit (apples, oranges, mangoes, bananas, grapes, berries, citrus, stone fruits, etc.)", fr: "Tout fruit frais (pommes, oranges, mangues, bananes, raisins, baies, agrumes, fruits à noyau, etc.)", es: "Cualquier fruta fresca (manzanas, naranjas, mangos, plátanos, uvas, bayas, cítricos, frutas de hueso, etc.)" },
+      { en: "Any fresh vegetable (tomatoes, peppers, leafy greens, cucumbers, carrots, broccoli, onions, etc.)", fr: "Tout légume frais (tomates, poivrons, légumes-feuilles, concombres, carottes, brocoli, oignons, etc.)", es: "Cualquier verdura fresca (tomates, pimientos, verduras de hoja, pepinos, zanahorias, brócoli, cebollas, etc.)" },
+      { en: "Raw or undercooked meat, poultry, or seafood", fr: "Viande, volaille ou fruits de mer crus ou insuffisamment cuits", es: "Carne, aves o mariscos crudos o poco cocidos" },
+      { en: "Raw eggs or hard-boiled eggs in the shell", fr: "Œufs crus ou œufs durs avec coquille", es: "Huevos crudos o huevos duros con cáscara" },
+      { en: "Unpasteurized dairy or soft fresh cheese in unsealed containers", fr: "Produits laitiers non pasteurisés ou fromage frais à pâte molle dans des contenants non scellés", es: "Lácteos no pasteurizados o queso fresco blando en envases no sellados" },
+      { en: "Fresh herbs with roots or soil", fr: "Herbes fraîches avec racines ou terre", es: "Hierbas frescas con raíces o tierra" },
     ],
   },
   {
     id: "japan",
-    name: "Japan (MAFF quarantine)",
+    name: { en: "Japan (MAFF quarantine)", fr: "Japon (quarantaine MAFF)", es: "Japón (cuarentena MAFF)" },
     codes: ["NRT","HND","KIX","NGO","CTS","FUK","OKA","OIT","KMI","KMJ","SDJ"],
     carriedBans: [
-      "Fresh fruits and vegetables (strict plant quarantine — most prohibited without inspection certificate)",
-      "Unprocessed or uninspected meat/poultry (especially pork from FMD-risk countries)",
-      "Plants with soil or roots",
+      { en: "Fresh fruits and vegetables (strict plant quarantine — most prohibited without inspection certificate)", fr: "Fruits et légumes frais (quarantaine végétale stricte — la plupart interdits sans certificat d'inspection)", es: "Frutas y verduras frescas (cuarentena vegetal estricta — la mayoría prohibidas sin certificado de inspección)" },
+      { en: "Unprocessed or uninspected meat/poultry (especially pork from FMD-risk countries)", fr: "Viande/volaille non transformée ou non inspectée (en particulier le porc en provenance de pays à risque de fièvre aphteuse)", es: "Carne/aves no procesadas o no inspeccionadas (especialmente cerdo de países con riesgo de fiebre aftosa)" },
+      { en: "Plants with soil or roots", fr: "Plantes avec terre ou racines", es: "Plantas con tierra o raíces" },
     ],
   },
   {
     id: "eu",
-    name: "EU/Schengen border",
+    name: { en: "EU/Schengen border", fr: "Frontière UE/Schengen", es: "Frontera UE/Schengen" },
     codes: [
       "CDG","ORY","NCE","LYS","MRS","TLS","NTE","BOD","SXB","MPL","LIL",
       "FRA","MUC","BER","HAM","DUS","CGN","STR","NUE","HAJ","DTM","LEJ",
@@ -1310,39 +1313,39 @@ const BORDER_COUNTRY_RULES = [
       "MLA","DUB","ORK","SNN",
     ],
     carriedBans: [
-      "Meat and meat products from outside the EU",
-      "Dairy products from outside the EU",
-      "Fresh fruits and vegetables from non-EU countries (without phytosanitary certificate)",
+      { en: "Meat and meat products from outside the EU", fr: "Viande et produits carnés en provenance de l'extérieur de l'UE", es: "Carne y productos cárnicos de fuera de la UE" },
+      { en: "Dairy products from outside the EU", fr: "Produits laitiers en provenance de l'extérieur de l'UE", es: "Productos lácteos de fuera de la UE" },
+      { en: "Fresh fruits and vegetables from non-EU countries (without phytosanitary certificate)", fr: "Fruits et légumes frais en provenance de pays hors UE (sans certificat phytosanitaire)", es: "Frutas y verduras frescas de países fuera de la UE (sin certificado fitosanitario)" },
     ],
   },
   {
     id: "uk",
-    name: "United Kingdom (HMRC/DEFRA)",
+    name: { en: "United Kingdom (HMRC/DEFRA)", fr: "Royaume-Uni (HMRC/DEFRA)", es: "Reino Unido (HMRC/DEFRA)" },
     codes: ["LHR","LGW","LTN","LCY","STN","MAN","EDI","GLA","BHX","BRS","NCL","LBA","ABZ","BFS","BHD","SOU","EXT","CWL"],
     carriedBans: [
-      "Meat and dairy from outside the UK (post-Brexit — EU products are also restricted)",
-      "Fresh fruit and vegetables from non-EU countries without phytosanitary certificates",
+      { en: "Meat and dairy from outside the UK (post-Brexit — EU products are also restricted)", fr: "Viande et produits laitiers en provenance de l'extérieur du Royaume-Uni (depuis le Brexit, les produits de l'UE sont également restreints)", es: "Carne y lácteos de fuera del Reino Unido (tras el Brexit, los productos de la UE también están restringidos)" },
+      { en: "Fresh fruit and vegetables from non-EU countries without phytosanitary certificates", fr: "Fruits et légumes frais en provenance de pays hors UE sans certificats phytosanitaires", es: "Frutas y verduras frescas de países fuera de la UE sin certificados fitosanitarios" },
     ],
   },
   {
     id: "uae",
-    name: "UAE/Gulf States",
+    name: { en: "UAE/Gulf States", fr: "EAU/États du Golfe", es: "EAU/Estados del Golfo" },
     codes: ["DXB","AUH","SHJ","DWC","AAN","RKT","FJR","DOH","MCT","SLL","KWI","BAH","RUH","JED","DMM","MED","TUU","AHB","GIZ"],
     carriedBans: [
-      "Pork products of any kind",
-      "Alcoholic beverages",
+      { en: "Pork products of any kind", fr: "Produits à base de porc, de toute sorte", es: "Productos de cerdo de cualquier tipo" },
+      { en: "Alcoholic beverages", fr: "Boissons alcoolisées", es: "Bebidas alcohólicas" },
     ],
   },
   {
     id: "canada",
-    name: "Canada (CBSA/CFIA)",
+    name: { en: "Canada (CBSA/CFIA)", fr: "Canada (ASFC/ACIA)", es: "Canadá (CBSA/CFIA)" },
     codes: ["YYZ","YVR","YUL","YYC","YEG","YOW","YWG","YHZ","YQB","YXE","YQR","YXX","YXU","YHM","YWG","YQM","YFC","YQT","YZF"],
     carriedBans: [
-      "Fresh fruits and vegetables without a phytosanitary certificate",
-      "Meat, poultry, and meat products (unless commercially canned/pouched and shelf-stable)",
-      "Raw or unpasteurized dairy products",
-      "Raw eggs or egg products (unless commercially sealed/pasteurized)",
-      "Plants, seeds, or soil-bearing plant material",
+      { en: "Fresh fruits and vegetables without a phytosanitary certificate", fr: "Fruits et légumes frais sans certificat phytosanitaire", es: "Frutas y verduras frescas sin certificado fitosanitario" },
+      { en: "Meat, poultry, and meat products (unless commercially canned/pouched and shelf-stable)", fr: "Viande, volaille et produits carnés (sauf en conserve/pochette commerciale et stables à température ambiante)", es: "Carne, aves y productos cárnicos (a menos que estén enlatados/empaquetados comercialmente y sean estables en anaquel)" },
+      { en: "Raw or unpasteurized dairy products", fr: "Produits laitiers crus ou non pasteurisés", es: "Productos lácteos crudos o no pasteurizados" },
+      { en: "Raw eggs or egg products (unless commercially sealed/pasteurized)", fr: "Œufs crus ou produits à base d'œufs (sauf scellés/pasteurisés commercialement)", es: "Huevos crudos o productos con huevo (a menos que estén sellados/pasteurizados comercialmente)" },
+      { en: "Plants, seeds, or soil-bearing plant material", fr: "Plantes, graines ou matériel végétal contenant de la terre", es: "Plantas, semillas o material vegetal con tierra" },
     ],
   },
 ];
@@ -1378,19 +1381,23 @@ function detectRestrictedBorders(destinations, goingUsa, departure) {
   return found;
 }
 
-// Union of every banned item across all restricted borders (deduped by text).
-function unionCarriedBans(restrictedBorders) {
+// Union of every banned item across all restricted borders (deduped by the
+// English text, regardless of which lang is returned, so the same item
+// mentioned by two different border rules doesn't appear twice).
+function unionCarriedBans(restrictedBorders, lang = "en") {
   const seen = new Set();
   const bans = [];
   for (const b of restrictedBorders) {
     for (const ban of b.carriedBans) {
-      if (!seen.has(ban)) { seen.add(ban); bans.push(ban); }
+      if (!seen.has(ban.en)) { seen.add(ban.en); bans.push(ban[lang] || ban.en); }
     }
   }
   return bans;
 }
 
-// Prompt block injected into the DAYS and EXTRAS AI prompts.
+// Prompt block injected into the DAYS and EXTRAS AI prompts — always English,
+// regardless of the crew member's language, since this instructs the model
+// rather than being shown to the user (see buildCarriedFoodNote for that).
 function buildCarriedFoodPromptBlock(restrictedBorders) {
   if (!restrictedBorders || restrictedBorders.length === 0) return "";
   const countryLines = restrictedBorders.map(b => {
@@ -1398,9 +1405,9 @@ function buildCarriedFoodPromptBlock(restrictedBorders) {
     if (b.days.length > 0) parts.push(`Day${b.days.length > 1 ? "s" : ""} ${b.days.join(" & ")}`);
     if (b.onReturn) parts.push("on return home");
     const dayStr = parts.length > 0 ? ` (${parts.join("; ")})` : " (during this pairing)";
-    return `  • ${b.name}${dayStr}`;
+    return `  • ${b.name.en}${dayStr}`;
   }).join("\n");
-  const banLines = unionCarriedBans(restrictedBorders).map(b => `  ❌ ${b}`).join("\n");
+  const banLines = unionCarriedBans(restrictedBorders, "en").map(b => `  ❌ ${b}`).join("\n");
   return `⚠️ CROSS-BORDER CARRIED-FOOD RULES — HARD REQUIREMENT:
 Crew carry ONE bag for the whole pairing. This pairing crosses:
 ${countryLines}
@@ -1414,17 +1421,53 @@ LOCALLY-PURCHASED, SAME-STOP MEALS (bought AND fully consumed at one stop before
 For any packed/carried meal "tip": briefly explain WHY shelf-stable — e.g. "Canned tuna used: packed items must clear USA and Japan customs."`;
 }
 
-// User-facing text added server-side to foodRestrictions.carried — not generated by the model.
-function buildCarriedFoodNote(restrictedBorders) {
+// Static template strings for buildCarriedFoodNote, by language.
+const CARRIED_NOTE_TEXT = {
+  en: {
+    day: (nums) => `Day ${nums.join(", ")}`,
+    onReturn: "on return home",
+    crossesOne: "Your bag crosses a restricted border on this pairing:",
+    crossesMany: "Your bag crosses multiple restricted borders on this pairing:",
+    mustClear: "Any food packed at home or carried between stops must clear ALL of these customs checkpoints. The following items cannot be packed or carried anywhere on this pairing:",
+    locallyPurchased: "Locally-purchased food bought and eaten entirely at one stop (nothing packed for later) does not have these restrictions.",
+    safeToCarry: "Safe to pack and carry: commercially packaged and sealed, canned, dried, or shelf-stable items only.",
+  },
+  fr: {
+    day: (nums) => `Jour ${nums.join(", ")}`,
+    onReturn: "au retour",
+    crossesOne: "Votre bagage traverse une frontière à restrictions durant ce pairing :",
+    crossesMany: "Votre bagage traverse plusieurs frontières à restrictions durant ce pairing :",
+    mustClear: "Tout aliment emballé à la maison ou transporté entre les escales doit franchir TOUS ces points de contrôle douanier. Les articles suivants ne peuvent être emballés ni transportés à aucun moment durant ce pairing :",
+    locallyPurchased: "Les aliments achetés localement et entièrement consommés à une même escale (rien de conservé pour plus tard) ne sont pas soumis à ces restrictions.",
+    safeToCarry: "Sûrs à emballer et transporter : uniquement des aliments emballés et scellés commercialement, en conserve, séchés, ou stables à température ambiante.",
+  },
+  es: {
+    day: (nums) => `Día ${nums.join(", ")}`,
+    onReturn: "al regreso",
+    crossesOne: "Tu equipaje cruza una frontera con restricciones durante este pairing:",
+    crossesMany: "Tu equipaje cruza varias fronteras con restricciones durante este pairing:",
+    mustClear: "Cualquier alimento empacado en casa o transportado entre escalas debe cumplir con TODOS estos controles aduaneros. Los siguientes artículos no se pueden empacar ni transportar en ningún momento durante este pairing:",
+    locallyPurchased: "Los alimentos comprados localmente y consumidos por completo en una sola escala (sin guardar nada para después) no están sujetos a estas restricciones.",
+    safeToCarry: "Seguro para empacar y transportar: solo alimentos empaquetados y sellados comercialmente, enlatados, secos, o estables a temperatura ambiente.",
+  },
+};
+
+// User-facing text added server-side to foodRestrictions.carried — not
+// generated by the model, so it needs its own localization (see
+// CARRIED_NOTE_TEXT above and the {en,fr,es} shape on BORDER_COUNTRY_RULES).
+function buildCarriedFoodNote(restrictedBorders, lang = "en") {
   if (!restrictedBorders || restrictedBorders.length === 0) return null;
+  const t = CARRIED_NOTE_TEXT[lang] || CARRIED_NOTE_TEXT.en;
   const countryStrs = restrictedBorders.map(b => {
     const parts = [];
-    if (b.days.length > 0) parts.push(`Day ${b.days.join(", ")}`);
-    if (b.onReturn) parts.push("on return home");
-    return `${b.name}${parts.length > 0 ? ` (${parts.join("; ")})` : ""}`;
+    if (b.days.length > 0) parts.push(t.day(b.days));
+    if (b.onReturn) parts.push(t.onReturn);
+    const name = b.name[lang] || b.name.en;
+    return `${name}${parts.length > 0 ? ` (${parts.join("; ")})` : ""}`;
   });
-  const bans = unionCarriedBans(restrictedBorders);
-  return `Your bag crosses ${countryStrs.length > 1 ? "multiple restricted borders" : "a restricted border"} on this pairing: ${countryStrs.join("; ")}.\n\nAny food packed at home or carried between stops must clear ALL of these customs checkpoints. The following items cannot be packed or carried anywhere on this pairing:\n${bans.map(b => `• ${b}`).join("\n")}\n\nLocally-purchased food bought and eaten entirely at one stop (nothing packed for later) does not have these restrictions.\n\nSafe to pack and carry: commercially packaged and sealed, canned, dried, or shelf-stable items only.`;
+  const bans = unionCarriedBans(restrictedBorders, lang);
+  const crosses = countryStrs.length > 1 ? t.crossesMany : t.crossesOne;
+  return `${crosses} ${countryStrs.join("; ")}.\n\n${t.mustClear}\n${bans.map(b => `• ${b}`).join("\n")}\n\n${t.locallyPurchased}\n\n${t.safeToCarry}`;
 }
 
 function buildExtrasPrompt(data, pairingDays, ctx) {
@@ -2044,7 +2087,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     const extras = await extrasPromise;
 
     // Inject the server-computed carried-food note (deterministic, not from the model).
-    const carriedNote = buildCarriedFoodNote(ctx.restrictedBorders);
+    const carriedNote = buildCarriedFoodNote(ctx.restrictedBorders, lang);
     if (carriedNote) {
       extras.foodRestrictions = { ...extras.foodRestrictions, carried: carriedNote };
     }
