@@ -1856,6 +1856,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           error: "premium_required",
           message: "A Premium subscription is required to generate plans. Start your free month for unlimited plans.",
           pairingCount: usage.pairingCount,
+          needsPremium: true,
         });
       }
       reservedFreeSlot = !usage.isPremium;
@@ -1885,6 +1886,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         hydration: computeHydration(data),
         pairingCount: usage.pairingCount,
         isPremium: usage.isPremium,
+        needsPremium: usage.needsPremium,
         hasPassword: usage.hasPassword,
       });
     }
@@ -1905,6 +1907,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         error: "premium_required",
         message: "A Premium subscription is required to generate plans. Start your free month for unlimited plans.",
         pairingCount: usage.pairingCount,
+        needsPremium: true,
       });
     }
     reservedFreeSlot = !usage.isPremium;
@@ -2060,6 +2063,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       hydration: computeHydration(data),
       pairingCount: usage.pairingCount,
       isPremium: usage.isPremium,
+      needsPremium: usage.needsPremium,
       hasPassword: usage.hasPassword,
       ...(failedDays.length ? { failedDays } : {}),
     };
