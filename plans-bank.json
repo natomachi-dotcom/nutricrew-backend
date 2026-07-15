@@ -6858,9 +6858,9 @@
             "meals": [
               {
                 "type": "Breakfast",
-                "name": "Halal Chicken Shawarma Wrap with Hummus",
-                "description": "Freshly made halal rotisserie chicken shawarma wrapped in warm pita bread with creamy hummus, fresh tomatoes, cucumbers, and tahini drizzle. Ordered from hotel room service or local halal deli.",
-                "prep": "Order pre-made from hotel halal menu or nearby certified halal restaurant; assemble in room if components delivered separately.",
+                "name": "Halal Turkey Bacon & Scrambled Eggs with Toast",
+                "description": "Scrambled eggs with halal turkey bacon, whole grain toast, and a side of fresh fruit from the hotel breakfast buffet.",
+                "prep": "Order from hotel breakfast buffet or halal-certified room service; assemble in room if delivered separately.",
                 "calories": 520,
                 "protein": 32,
                 "carbs": 48,
@@ -6868,11 +6868,10 @@
                 "tags": [
                   "halal",
                   "high-protein",
-                  "portable",
-                  "middle-eastern"
+                  "portable"
                 ],
-                "tip": "Pack napkins and a small container to catch any drips during your shift—shawarma can be messy on the go but provides sustained energy for early morning flights.",
-                "emoji": "🌯🍗🥒"
+                "tip": "Ask the buffet to keep the eggs and turkey bacon on a separate plate from any non-halal items to avoid cross-contact.",
+                "emoji": "🍳🥓🍞"
               },
               {
                 "type": "Lunch",
@@ -7005,21 +7004,20 @@
             "meals": [
               {
                 "type": "Breakfast",
-                "name": "Halal Chicken & Muhammara Breakfast Bowl",
-                "description": "Shredded halal rotisserie chicken with roasted red pepper dip, whole grain bread, fresh tomatoes, cucumbers, and labneh (strained yogurt). Topped with pomegranate seeds and olive oil.",
-                "prep": "Order halal rotisserie chicken from hotel restaurant or halal market; assemble cold in room with packaged labneh, fresh vegetables, and store-bought muhammara.",
+                "name": "Halal Chicken Sausage & Vegetable Omelet with Fruit",
+                "description": "Fluffy vegetable omelet with halal chicken sausage, served with whole grain toast and fresh seasonal fruit.",
+                "prep": "Order from hotel breakfast buffet or halal-certified room service; assemble in room if delivered separately.",
                 "calories": 480,
                 "protein": 28,
                 "carbs": 52,
                 "fat": 16,
                 "tags": [
-                  "halal-certified",
+                  "halal",
                   "high-protein",
-                  "portable",
-                  "Mediterranean"
+                  "portable"
                 ],
-                "tip": "Pack muhammara and labneh in separate small containers to prevent soggy bread—assemble just before eating.",
-                "emoji": "🍗🥒🍅"
+                "tip": "Confirm the chicken sausage is halal-certified with the hotel kitchen before ordering.",
+                "emoji": "🍳🌭🍓"
               },
               {
                 "type": "Lunch",
@@ -7258,20 +7256,21 @@
             "meals": [
               {
                 "type": "Breakfast",
-                "name": "Halal Chicken & Vegetable Wrap",
-                "description": "Pre-made whole wheat wrap filled with halal rotisserie chicken, fresh lettuce, tomato, cucumber, and tahini-based dressing. Served cold with a side of fresh berries.",
-                "prep": "Hotel room assembly—unwrap and eat, or request from hotel breakfast service.",
+                "name": "Halal Labneh & Za'atar Flatbread with Boiled Eggs and Fruit",
+                "description": "Creamy labneh (strained yogurt) with za'atar and olive oil, whole grain flatbread, boiled eggs, and fresh fruit.",
+                "prep": "Order from hotel breakfast buffet or halal-certified room service; assemble in room if delivered separately.",
                 "calories": 420,
                 "protein": 28,
                 "carbs": 52,
                 "fat": 12,
                 "tags": [
-                  "halal-certified",
+                  "halal",
                   "high-protein",
-                  "portable"
+                  "portable",
+                  "Mediterranean"
                 ],
-                "tip": "Request the rotisserie chicken be freshly sliced from the hotel restaurant's halal section to ensure quality and moisture.",
-                "emoji": "🌯🍗🥒"
+                "tip": "Labneh and boiled eggs both travel well if you need to save half for later in your shift.",
+                "emoji": "🥣🍞🥚"
               },
               {
                 "type": "Lunch",
