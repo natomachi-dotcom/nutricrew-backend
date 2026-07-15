@@ -2042,6 +2042,13 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       ? Promise.resolve(cachedExtras)
       : runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 1200, FAST_MODEL)
           .then(result => { storeExtrasCache(extrasKey, result); return result; });
+    // extrasPromise isn't awaited until after day generation + guards run, which can
+    // take a while — if it rejects (e.g. truncated JSON from the model) before then,
+    // Node flags it as an unhandled rejection and kills the whole function process,
+    // producing a hard 500 instead of the graceful error handling below. Attaching a
+    // no-op .catch() here just marks it "observed" immediately; it doesn't consume
+    // the rejection, so the real `await extrasPromise` below still throws normally.
+    extrasPromise.catch(() => {});
 
     if (cachedDays.length >= pairingDays) {
       // Full cache hit — no DAYS API call needed
