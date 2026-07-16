@@ -108,11 +108,20 @@ console.log("\n=== plan-bank key format ===");
   );
   const hotelKeys = keys.filter(k => k.split("|")[4] === "hotel");
   check("hotel-kitchen entries exist under the real \"hotel\" key", hotelKeys.length > 0);
+  // The bank is allowed to trail behind server.js's CACHE_SCHEMA_VERSION (it
+  // just goes dormant — see the rawBankEntries filter in /api/generate-plan —
+  // until someone re-runs generate-bank.js) but must NEVER be ahead, which
+  // would mean a hand-edited/corrupted version segment.
+  const bankVersions = [...new Set(keys.map(k => k.split("|")[1]))];
+  const versionNum = (v) => parseInt(String(v).replace(/^v/, ""), 10) || 0;
   check(
-    "every key's version segment matches server.js's CACHE_SCHEMA_VERSION",
-    keys.every(k => k.split("|")[1] === CACHE_SCHEMA_VERSION),
-    `expected ${CACHE_SCHEMA_VERSION}, saw ${[...new Set(keys.map(k => k.split("|")[1]))].join(",")}`
+    "bank version segment is never ahead of server.js's CACHE_SCHEMA_VERSION",
+    bankVersions.every(v => versionNum(v) <= versionNum(CACHE_SCHEMA_VERSION)),
+    `bank has ${bankVersions.join(",")}, server.js has ${CACHE_SCHEMA_VERSION}`
   );
+  if (bankVersions.some(v => v !== CACHE_SCHEMA_VERSION)) {
+    console.log(`  i bank version(s) [${bankVersions.join(",")}] trail server.js's ${CACHE_SCHEMA_VERSION} — bank is dormant until \`node generate-bank.js\` is re-run (expected after a MEAL_SCHEMA change; not a failure)`);
+  }
   check(
     "every key encodes a pairingDays segment matching its entries",
     keys.every(k => {

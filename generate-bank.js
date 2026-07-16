@@ -26,9 +26,20 @@ const OUT = "./plans-bank.json";
 // writes to. A mismatch here silently makes every entry this script produces
 // unreachable (this has already happened twice: once from a missing version
 // segment entirely, once from a stale "hotel_no_kitchen" kitchen key).
-const CACHE_SCHEMA_VERSION = "v7";
+const CACHE_SCHEMA_VERSION = "v8";
 
 // ─── SCHEMAS (must match server.js) ──────────────────────────────
+// server.js's hard validator (validatePlan) now runs against EVERY bank
+// entry before it's ever served (see the rawBankEntries filter in
+// /api/generate-plan) — an entry missing ingredients/estimated_cost/
+// allergens_present/diet_tags/prep_method will simply fail validation and
+// get discarded at serve time, falling through to normal AI generation. So
+// this schema must stay in lockstep with server.js's MEAL_SCHEMA or freshly
+// generated bank entries are silent, wasted spend.
+const ALLERGEN_TAGS = [
+  "peanuts", "tree_nuts", "milk", "eggs", "fish", "shellfish", "soy",
+  "wheat_gluten", "sesame", "mustard", "celery", "lupin", "sulphites",
+];
 
 const MEAL_SCHEMA = {
   type: "object",
@@ -42,11 +53,41 @@ const MEAL_SCHEMA = {
     carbs: { type: "integer" },
     fat: { type: "integer" },
     tags: { type: "array", items: { type: "string" } },
+    ingredients: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          quantity: { type: "number" },
+          unit: { type: "string" },
+        },
+        required: ["name", "quantity", "unit"],
+        additionalProperties: false,
+      },
+      description: "Every distinct ingredient in this meal, listed separately — never omit one because it seems minor.",
+    },
+    estimated_cost: { type: "number", description: "Estimated USD-equivalent cost of this meal's ingredients for a single portion." },
+    allergens_present: {
+      type: "array",
+      items: { type: "string", enum: ALLERGEN_TAGS },
+      description: "EVERY major allergen category this meal's ingredients touch, including hidden/derivative sources. Empty array only if genuinely none apply.",
+    },
+    diet_tags: {
+      type: "array",
+      items: { type: "string" },
+      description: "Diet/lifestyle labels this exact meal fully satisfies (e.g. vegan, gluten_free, halal, keto) — only if genuinely, completely true.",
+    },
+    prep_method: {
+      type: "string",
+      enum: ["no_cook", "microwave", "stove_oven", "airplane_provided"],
+      description: "The realistic way this meal gets made, matching the kitchen access given above.",
+    },
     tip: { type: "string" },
     recyclingTip: { type: "string" },
     emoji: { type: "string" },
   },
-  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji"],
+  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients", "estimated_cost", "allergens_present", "diet_tags", "prep_method"],
   additionalProperties: false,
 };
 
@@ -60,9 +101,10 @@ const DAYS_SCHEMA = {
         properties: {
           label: { type: "string" },
           jetlagNote: { type: ["string", "null"] },
+          hydrationNote: { type: ["string", "null"] },
           meals: { type: "array", items: MEAL_SCHEMA },
         },
-        required: ["label", "jetlagNote", "meals"],
+        required: ["label", "jetlagNote", "hydrationNote", "meals"],
         additionalProperties: false,
       },
     },
@@ -137,7 +179,7 @@ const PAIRING_DAYS_LIST = [1, 2, 3];
 
 function buildDaysPrompt(pairingDays, dietLabel, kitchenLabel) {
   const daySpecs = Array.from({ length: pairingDays }, (_, i) =>
-    `Day ${i + 1} — jetlagNote: null`
+    `Day ${i + 1} — jetlagNote: null, hydrationNote: one short crew-specific hydration tip for a ground day`
   ).join("\n");
 
   return `You are a professional nutritionist specializing in aviation crew health.
@@ -156,6 +198,11 @@ Rules:
 - Do NOT include a "container" field.
 - Vary meals significantly across days — different ingredients, cuisines, and preparation styles.
 - The "prep" field must respect the kitchen access constraint above.
+- List EVERY distinct ingredient in "ingredients" (as {name, quantity, unit}) — however minor. This is the primary signal a downstream automated allergen check relies on; an incomplete list is treated as a failure.
+- "allergens_present" must honestly include every major allergen this meal's ingredients touch, including hidden/derivative sources (e.g. Worcestershire sauce -> fish; soy sauce -> wheat + soy; pesto -> tree_nuts). Allergies stated in DIETARY REQUIREMENT above are absolute prohibitions, not preferences — leave out anything even plausibly a hidden source.
+- "estimated_cost" must be a realistic USD-equivalent estimate for one portion.
+- "prep_method" (no_cook / microwave / stove_oven / airplane_provided) must match what's actually achievable under KITCHEN ACCESS above.
+- "diet_tags" must only include a label if the meal genuinely, fully satisfies it.
 
 Per-day instructions:
 ${daySpecs}`;
@@ -253,8 +300,10 @@ async function main() {
         console.log(`[${combo}/${totalCombos}] GEN  ${diet.key} × ${kitchen.key} × ${pairingDays}d`);
 
         try {
-          // Step 1: Generate days
-          const maxDayTokens = Math.min(2200 * pairingDays, 6000);
+          // Step 1: Generate days. Bumped from 2200/day (6000 cap) now that
+          // MEAL_SCHEMA carries structured ingredients + allergens_present +
+          // diet_tags + estimated_cost + prep_method per meal.
+          const maxDayTokens = Math.min(3000 * pairingDays, 9000);
           const daysResult = await withRetry(
             () => runStructured(
               buildDaysPrompt(pairingDays, diet.label, kitchen.label),
@@ -268,6 +317,7 @@ async function main() {
             day: i + 1,
             label: d.label || `Day ${i + 1}`,
             jetlagNote: null,
+            hydrationNote: d.hydrationNote || null,
             meals: d.meals,
             totalCalories: d.meals.reduce((s, m) => s + (m.calories || 0), 0),
           }));

@@ -245,6 +245,18 @@ const loginLimiter = rateLimit({
   message: { error: "Too many login attempts. Please try again in 15 minutes." },
 });
 
+// The 14 EU/UK major-allergen categories (crustaceans+molluscs collapsed into
+// one "shellfish" tag to match how this app already models shellfish_free as
+// a single diet/allergy checkbox). Used both as the model's own self-report
+// (MEAL_SCHEMA.allergens_present) and as the canonical key set the hard
+// validator's ingredient/derivative matcher (see ALLERGEN_DERIVATIVES) is
+// built around — the two must stay in the same vocabulary so the validator
+// can cross-check the model's self-report against its own independent scan.
+const ALLERGEN_TAGS = [
+  "peanuts", "tree_nuts", "milk", "eggs", "fish", "shellfish", "soy",
+  "wheat_gluten", "sesame", "mustard", "celery", "lupin", "sulphites",
+];
+
 const MEAL_SCHEMA = {
   type: "object",
   properties: {
@@ -262,15 +274,43 @@ const MEAL_SCHEMA = {
     tags: { type: "array", items: { type: "string" } },
     ingredients: {
       type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Short ingredient name, e.g. \"eggs\", \"spinach\", \"feta cheese\" — specific enough for a crew member to spot a personal allergen." },
+          quantity: { type: "number" },
+          unit: { type: "string", description: "e.g. g, ml, tbsp, cup, piece, slice" },
+        },
+        required: ["name", "quantity", "unit"],
+        additionalProperties: false,
+      },
+      description: "EVERY distinct ingredient in this meal, listed separately — never omit one because it seems minor; a crew member's allergy safety and the cost/allergen checks below depend on this list being complete.",
+    },
+    estimated_cost: {
+      type: "number",
+      description: "Estimated USD-equivalent cost of this meal's ingredients for the crew member's own single portion (not a whole recipe/family size).",
+    },
+    allergens_present: {
+      type: "array",
+      items: { type: "string", enum: ALLERGEN_TAGS },
+      description: "EVERY major allergen category this meal's ingredients touch, including hidden/derivative sources (e.g. Worcestershire sauce -> fish; soy sauce -> wheat + soy; pesto -> tree_nuts). Empty array only if genuinely none apply. This is cross-checked against the ingredients list — it is not a substitute for keeping ingredients accurate, it's an independent second signal.",
+    },
+    diet_tags: {
+      type: "array",
       items: { type: "string" },
-      description: "Each distinct ingredient by short name (e.g. \"eggs\", \"spinach\", \"feta cheese\") — specific enough for a crew member to spot a personal allergen, not full recipe steps.",
+      description: "Diet/lifestyle labels this exact meal fully satisfies, from: vegan, vegetarian, halal, kosher, gluten_free, dairy_free, lactose_free, nut_free, egg_free, shellfish_free, soy_free, sesame_free, low_carb, keto, paleo, carnivore, mediterranean, fodmap. Only include a tag if the meal genuinely, completely satisfies it — do not tag optimistically.",
+    },
+    prep_method: {
+      type: "string",
+      enum: ["no_cook", "microwave", "stove_oven", "airplane_provided"],
+      description: "The ONE realistic way this meal actually gets made: no_cook = pure assembly/cold, no heating of any kind; microwave = needs a microwave (no stove/oven); stove_oven = needs a stove, oven, or grill; airplane_provided = airline-catered, the crew member doesn't prepare it at all. Must match the KITCHEN ACCESS constraint given above for this meal.",
     },
     tip: { type: "string" },
     recyclingTip: { type: "string" },
     emoji: { type: "string" },
     container: { type: "string", description: "Recommended Tupperware/container size and shape for packing this meal, e.g. '500ml rectangular container' or '300ml round container with dividers'. Only include if a lunch bag size was provided." },
   },
-  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients"],
+  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients", "estimated_cost", "allergens_present", "diet_tags", "prep_method"],
   additionalProperties: false,
 };
 
@@ -554,221 +594,421 @@ function rescaleMealsToTarget(meals, target, toleranceFraction = 0.15) {
   return { meals: rescaled, totalCalories: newTotal };
 }
 
-// ── ALLERGEN GUARD ──────────────────────────────────────────────────────
-// The model doesn't 100% reliably follow allergy instructions in the prompt
-// alone (observed live: nut-free plans still including peanut butter or
-// unlabeled granola). For genuine allergies/intolerances — as opposed to
-// broader lifestyle diets — a deterministic keyword check + one corrective
-// regeneration pass is a real guarantee, not just a request to the model.
-// Scoped to the 7 binary, well-defined allergens; FODMAP is excluded (a fuzzy
-// elimination diet with many portion-dependent exceptions, not a fixed
-// banned-ingredient list, and not typically life-threatening like the others).
-const ALLERGEN_RULES = {
-  nut_free: {
-    banned: /\b(peanuts?|peanut butter|almonds?|walnuts?|cashews?|pistachios?|pecans?|hazelnuts?|macadamia|brazil nuts?|pine nuts?|nutella|marzipan|praline|granola|trail mix|pesto)\b/i,
-    qualifier: /nut-free|nut free/i,
-  },
-  shellfish_free: {
-    banned: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|fish sauce|shrimp paste|surimi)\b/i,
-    // The model tags compliant meals with "shellfish-free" in its own tags array
-    // (and says it in tip/description) — that self-compliance marker was tripping
-    // the bare "shellfish" match against itself. Same blunt-instrument tradeoff as
-    // every other allergen's qualifier below: the check is whole-meal-text, not
-    // positional, so a genuine violation (e.g. real oyster sauce) that happens to
-    // co-occur with an unrelated "shellfish-free" mention elsewhere in the same
-    // meal would also be masked. Accepted as the same risk profile every other
-    // allergen's qualifier already carries, not a new gap introduced here.
-    qualifier: /shellfish-free|shellfish free/i,
-  },
-  egg_free: {
-    banned: /\b(eggs?|mayonnaise|mayo|hollandaise|b[ée]arnaise|meringue|frittata|quiche|french toast)\b/i,
-    qualifier: /egg-free|egg free/i,
-  },
-  soy_free: {
-    banned: /\b(soy sauce|soybeans?|edamame|tofu|tempeh|soy milk|miso|soy lecithin)\b/i,
-    qualifier: /soy-free|soy free|coconut aminos|tamari/i,
-  },
-  gluten_free: {
-    banned: /\b(wheat|barley|rye|spelt|regular oats|regular (bread|pasta)|flour tortillas?|soy sauce)\b/i,
-    qualifier: /gluten-free|gluten free/i,
-  },
-  dairy_free: {
-    banned: /\b(milk|cheese|butter|cream|yogurt|whey)\b/i,
-    qualifier: /dairy-free|dairy free|coconut|oat milk|almond milk|plant-based|vegan/i,
-  },
-  lactose_free: {
-    banned: /\b(milk|cream|yogurt)\b/i,
-    qualifier: /lactose-free|lactose free|hard cheese|parmesan|cheddar|aged cheese/i,
-  },
-  sesame_free: {
-    banned: /\b(sesame|tahini|halva|za'?\s?atar|benne|gomashio|hummus|baba ganoush)\b/i,
-    qualifier: /sesame-free|sesame free|tahini-free|tahini free/i,
-  },
-};
-
-// Kosher's core rule isn't "banned ingredient present" like an allergy — it's
-// "meat and dairy never in the SAME meal". A simple presence-based keyword
-// scan can't express that, so this is a separate compositional check.
-const KOSHER_MEAT_WORDS = /\b(beef|chicken|turkey|lamb|veal|duck|goose|sausage|bacon|ham|pastrami|salami|jerky|meat|poultry)\b/i;
-const KOSHER_DAIRY_WORDS = /\b(cheese|milk|cream|butter|yogurt|yoghurt|whey|ghee)\b/i;
+// ── HARD VALIDATOR ──────────────────────────────────────────────────────
+// Architecture: the model PROPOSES a plan (structured JSON — see MEAL_SCHEMA,
+// which requires ingredients/allergens_present/diet_tags/estimated_cost/
+// prep_method so every constraint below is inspectable in code, not prose),
+// and this section VALIDATES every constraint deterministically. No plan is
+// ever served unless it passes validatePlan() — an LLM follows instructions
+// probabilistically and cannot be trusted alone to hard-enforce a
+// life-threatening allergy, a diet rule, a calorie/budget target, or a meal
+// landing in the right slot. The old approach here (a single best-effort
+// regex check + one regeneration attempt, then "serving anyway" if it still
+// failed) is exactly the failure mode this replaces.
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Scans one meal's text for banned terms belonging to the crew member's
-// active allergen/intolerance selections. A banned term is only a violation
-// if the diet has no qualifier pattern, or the qualifier phrase isn't also
-// present somewhere in the same meal (e.g. "gluten-free tamari" is fine).
-// customAllergyTerm is the crew member's own free-text "Other" allergy (not
-// covered by any fixed ALLERGEN_RULES entry) — matched as a plain whole-word,
-// case-insensitive search since there's no curated banned/qualifier pattern for it.
-// Deliberately excludes meal.tip: several diet-rule blocks (nut_free, egg_free,
-// shellfish_free, soy_free, sesame_free, gluten_free) instruct the model to write
-// a cross-contamination WARNING into "tip" naming the allergen (e.g. "check the
-// label for fish sauce") — that's advisory prose about what to avoid, not a
-// description of what's in the dish, and scanning it made every such warning
-// a false-positive "violation" against itself.
-function findMealAllergenViolations(meal, activeDiets, customAllergyTerm) {
-  const text = [meal.name, meal.description, ...(meal.tags || []), ...(meal.ingredients || [])].filter(Boolean).join(" ");
+// ─── A. ALLERGENS (zero tolerance) ───────────────────────────────────────
+// Each pattern covers the obvious word AND its common derivatives/hidden
+// sources — the part a prompt-only approach structurally cannot guarantee,
+// because it has to catch every alias, not just the ones the model thinks of.
+const ALLERGEN_DERIVATIVES = {
+  peanuts: /\b(peanuts?|peanut butter|groundnuts?|arachis)\b/i,
+  tree_nuts: /\b(almonds?|almond butter|walnuts?|cashews?|cashew butter|pecans?|pistachios?|hazelnuts?|filberts?|macadamias?|brazil nuts?|pine nuts?|pignoli|chestnuts?|nutella|marzipan|praline|nut butter|gianduja|frangipane|pesto)\b/i,
+  // "butter" excludes nut/seed/fruit "___ butter" compounds (peanut butter,
+  // almond butter, apple butter, ...) — those are correctly caught by the
+  // tree_nuts/peanuts patterns instead, not dairy; a bare \bbutter\b match
+  // was flagging "peanut butter" as a MILK violation, a false positive for
+  // any allergen combo that doesn't actually include dairy.
+  milk: /\b(milk|buttermilk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|cocoa|cacao|shea|sunflower|apple|nut|seed)\s)butter|cheeses?|yog?hurt|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half)\b/i,
+  eggs: /\b(eggs?|egg whites?|egg yolks?|albumin|albumen|ovalbumin|mayonnaise|mayo|hollandaise|b[ée]arnaise|meringue|frittata|quiche|french toast|egg wash|aioli)\b/i,
+  fish: /\b(fish|anchov(?:y|ies)|fish sauce|worcestershire(?: sauce)?|bonito|dashi|salmon|tuna|cod|tilapia|sardines?|surimi|imitation crab)\b/i,
+  shellfish: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|crawfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|shrimp paste)\b/i,
+  soy: /\b(soy|soya|soybeans?|edamame|tofu|tempeh|miso|soy sauce|tamari|soy milk|soy lecithin|textured vegetable protein|TVP|natto)\b/i,
+  wheat_gluten: /\b(wheat|flour|breads?|breadcrumbs?|panko|pasta|noodles?|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|crackers?|tortillas?|soy sauce)\b/i,
+  sesame: /\b(sesame|tahini|halva|za'?\s?atar|benne|gomashio|hummus|baba ganoush)\b/i,
+  mustard: /\b(mustard|dijon)\b/i,
+  celery: /\b(celery|celeriac)\b/i,
+  lupin: /\b(lupine?|lupini)\b/i,
+  sulphites: /\b(sulphites?|sulfites?|sulf?ur dioxide)\b/i,
+};
+
+// Maps this app's existing allergy/diet checkboxes to the canonical allergen
+// tags above. dairy_free is intentionally the zero-tolerance "milk" tag;
+// lactose_free is deliberately NOT mapped here — see LACTOSE_PATTERN below.
+// Lactose intolerance is dose-dependent and this app's own diet rules
+// explicitly allow hard aged cheese and butter for it, so treating it as a
+// zero-tolerance allergen would reject perfectly compliant meals.
+const USER_ALLERGY_TO_TAGS = {
+  nut_free: ["peanuts", "tree_nuts"],
+  dairy_free: ["milk"],
+  egg_free: ["eggs"],
+  shellfish_free: ["shellfish"],
+  soy_free: ["soy"],
+  gluten_free: ["wheat_gluten"],
+  sesame_free: ["sesame"],
+};
+
+// Free-text self-compliance phrases (e.g. "gluten-free tamari") that would
+// otherwise trip a bare keyword match against the meal's OWN advisory prose.
+// Only applied to the name/description/tip scan — ingredients and the
+// model's own allergens_present are discrete data, not prose, so this
+// false-positive mode doesn't apply there.
+const ALLERGEN_SELF_LABEL_QUALIFIER = {
+  peanuts: /nut-free/i, tree_nuts: /nut-free/i, milk: /dairy-free|milk-free|lactose-free|plant-based/i,
+  eggs: /egg-free/i, soy: /soy-free/i, wheat_gluten: /gluten-free|wheat-free/i,
+  sesame: /sesame-free|tahini-free/i, shellfish: /shellfish-free/i, fish: /fish-free/i,
+};
+
+function getUserRequiredAllergenAvoidance(data) {
+  const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
+  const tags = new Set();
+  for (const d of rawDiets) for (const tag of (USER_ALLERGY_TO_TAGS[d] || [])) tags.add(tag);
+  const customAllergyTerm = rawDiets.includes("allergy_other")
+    ? (data.allergy_other_text || "").trim().slice(0, 100)
+    : "";
+  return { tags, customAllergyTerm };
+}
+
+// Checks ONE meal against the user's required allergen avoidance. Three
+// independent signals, any one of which is a hard fail:
+//   1. the model's own allergens_present self-report intersecting the
+//      required-avoid tags (cheapest, catches honest self-reports the
+//      ingredient scan alone might miss),
+//   2. a structured ingredient NAME matching a derivative pattern — the
+//      primary, most reliable signal, since ingredients are discrete data
+//      rather than prose,
+//   3. the meal's free-text name/description/tip matching a derivative
+//      pattern (catches a hidden allergen the model named in prose but
+//      didn't list as a discrete ingredient).
+function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
   const violations = [];
-  for (const diet of activeDiets) {
-    const rule = ALLERGEN_RULES[diet];
-    if (!rule) continue;
-    const match = text.match(rule.banned);
-    if (!match) continue;
-    if (rule.qualifier && rule.qualifier.test(text)) continue;
-    violations.push({ diet, term: match[0] });
+  const ingredientNames = (meal.ingredients || []).map(i => (typeof i === "string" ? i : i?.name)).filter(Boolean);
+  const selfReported = new Set(meal.allergens_present || []);
+
+  for (const tag of requiredTags) {
+    if (selfReported.has(tag)) {
+      violations.push({ code: "ALLERGEN", tag, source: "self_report", detail: `model self-reported allergens_present includes "${tag}"` });
+      continue;
+    }
+    const pattern = ALLERGEN_DERIVATIVES[tag];
+    if (!pattern) continue;
+    const ingHit = ingredientNames.find(n => pattern.test(n));
+    if (ingHit) {
+      violations.push({ code: "ALLERGEN", tag, source: "ingredient", detail: ingHit });
+      continue;
+    }
+    const text = [meal.name, meal.description, meal.tip].filter(Boolean).join(" ");
+    const match = text.match(pattern);
+    if (match) {
+      const qualifier = ALLERGEN_SELF_LABEL_QUALIFIER[tag];
+      if (qualifier && qualifier.test(text)) continue;
+      violations.push({ code: "ALLERGEN", tag, source: "text", detail: match[0] });
+    }
   }
-  if (activeDiets.includes("kosher") && KOSHER_MEAT_WORDS.test(text) && KOSHER_DAIRY_WORDS.test(text)) {
-    violations.push({ diet: "kosher", term: "meat and dairy combined in one meal" });
-  }
+
   if (customAllergyTerm) {
     // "s?" tolerates a simple plural (e.g. "kiwi" also catches "kiwis") — not
     // full stemming, but cheap insurance against the most common miss.
-    const match = text.match(new RegExp(`\\b${escapeRegExp(customAllergyTerm)}s?\\b`, "i"));
-    if (match) violations.push({ diet: "allergy_other", term: match[0] });
+    const re = new RegExp(`\\b${escapeRegExp(customAllergyTerm)}s?\\b`, "i");
+    const ingHit = ingredientNames.find(n => re.test(n));
+    const text = [meal.name, meal.description, meal.tip].filter(Boolean).join(" ");
+    const match = ingHit ? [ingHit] : text.match(re);
+    if (match) violations.push({ code: "ALLERGEN", tag: "allergy_other", source: ingHit ? "ingredient" : "text", detail: match[0] });
+  }
+
+  return violations;
+}
+
+// ─── C. DIET COMPLIANCE (ingredient-prohibition diets, non-allergen) ────
+const MEAT_WORDS = /\b(beef|chicken|turkey|lamb|veal|duck|goose|pork|sausages?|bacon|hams?|pastrami|salami|jerky|meat|poultry|prosciutto|pepperoni|chorizo)\b/i;
+const HONEY_GELATIN_WORDS = /\b(honey|gelatine?)\b/i;
+const PORK_WORDS = /\b(pork|bacon|hams?|lard|prosciutto|pancetta|pepperoni|chorizo|salami|sausages?)\b/i;
+const ALCOHOL_WORDS = /\b(wine|beer|rum|vodka|whisk(?:e)?y|sake|sherry|marsala|liqueur|alcohol|brandy|champagne)\b/i;
+const LACTOSE_PATTERN = /\b(milk|creams?|soft cheese|ice cream|yog?hurt)\b/i;
+// "butter" excludes nut/seed "___ butter" compounds — paleo explicitly
+// allows nuts/seeds (and their butters), so a bare \bbutter\b would wrongly
+// flag "almond butter" as the banned dairy butter.
+const PALEO_PROHIBITED = /\b(wheat|breads?|pasta|rice|oats|corn|barley|rye|beans?|lentils?|chickpeas?|peanuts?|soy|tofu|milk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|sunflower|seed)\s)butter|cheeses?|yog?hurt|refined sugar|white sugar|brown sugar|corn syrup)\b/i;
+const FODMAP_PROHIBITED = /\b(onions?|garlic|wheat|beans?|lentils?|apples?|pears?|mango(?:es)?|watermelon|honey|high[- ]fructose corn syrup|soft cheese|cashews?|pistachios?)\b/i;
+const CARNIVORE_PLANT_HINT = /\b(vegetables?|fruit|grains?|rice|breads?|pasta|beans?|lentils?|nuts?|seeds?|sugar|vegetable oil|olive oil|potatoes?|salad|greens?)\b/i;
+
+// diet checkbox id -> banned-ingredient regex. Deliberately excludes
+// gluten_free/dairy_free/nut_free/egg_free/shellfish_free/soy_free/
+// sesame_free — those are handled with zero-tolerance ALLERGEN severity
+// above (section A), not here, so a violation isn't checked twice.
+const DIET_PROHIBITED = {
+  vegan: new RegExp([MEAT_WORDS.source, ALLERGEN_DERIVATIVES.fish.source, ALLERGEN_DERIVATIVES.shellfish.source, ALLERGEN_DERIVATIVES.milk.source, ALLERGEN_DERIVATIVES.eggs.source, HONEY_GELATIN_WORDS.source].join("|"), "i"),
+  vegetarian: new RegExp([MEAT_WORDS.source, ALLERGEN_DERIVATIVES.fish.source, ALLERGEN_DERIVATIVES.shellfish.source, "gelatine?"].join("|"), "i"),
+  halal: new RegExp([PORK_WORDS.source, ALCOHOL_WORDS.source].join("|"), "i"),
+  lactose_free: LACTOSE_PATTERN,
+  paleo: PALEO_PROHIBITED,
+  fodmap: FODMAP_PROHIBITED,
+  carnivore: CARNIVORE_PLANT_HINT,
+};
+
+// Kosher's core rule isn't "banned ingredient present" like an allergy — it's
+// "meat and dairy never in the SAME meal", plus the usual no-pork/no-shellfish.
+const KOSHER_DAIRY_WORDS = /\b(cheeses?|milk|creams?|butter|yog?hurt|whey|ghee)\b/i;
+
+function findMealDietViolations(meal, activeDietTags) {
+  const violations = [];
+  const ingredientNames = (meal.ingredients || []).map(i => (typeof i === "string" ? i : i?.name)).filter(Boolean);
+  const text = [meal.name, meal.description, ...ingredientNames].filter(Boolean).join(" ");
+
+  for (const diet of activeDietTags) {
+    const pattern = DIET_PROHIBITED[diet];
+    if (!pattern) continue;
+    const match = text.match(pattern);
+    if (match) violations.push({ code: "DIET", dietTag: diet, detail: match[0] });
+  }
+
+  if (activeDietTags.includes("kosher")) {
+    if (MEAT_WORDS.test(text) && KOSHER_DAIRY_WORDS.test(text)) {
+      violations.push({ code: "DIET", dietTag: "kosher", detail: "meat and dairy combined in one meal" });
+    }
+    const porkMatch = text.match(PORK_WORDS);
+    if (porkMatch) violations.push({ code: "DIET", dietTag: "kosher", detail: porkMatch[0] });
+    const shellfishMatch = text.match(ALLERGEN_DERIVATIVES.shellfish);
+    if (shellfishMatch) violations.push({ code: "DIET", dietTag: "kosher", detail: shellfishMatch[0] });
+  }
+
+  return violations;
+}
+
+const LOW_CARB_DAILY_LIMIT_G = 50;
+
+// ─── B. MEAL SLOT / STRUCTURE ─────────────────────────────────────────────
+// "Dinner should be a substantial main, not an appetizer" and "no dinner-
+// style dish under Breakfast" survived repeated explicit prompt prohibition
+// and still recurred — a keyword check on the actual proposed content is the
+// only way to catch it deterministically instead of trusting the model to
+// self-police its own slot.
+const APPETIZER_MEAL_PATTERN = /\b(carpaccio|charcuterie|antipasto|tartare|crudo)\b|\b(cheese|charcuterie|cured meat|cold cuts?)\s+(plate|platter|board)\b|\bprosciutto-wrapped\b/i;
+const DINNER_STYLE_AT_BREAKFAST_PATTERN = /\b(shawarma|kebabs?|curry|stir-?fry|burgers?|steaks?|schnitzel|tagine|casserole|lasagn?a|risotto|rice bowl|burritos?|tacos?|fajitas?|chili|pot pie|meatballs?|gyros?)\b/i;
+const BREAKFAST_STYLE_AT_DINNER_PATTERN = /\b(pancakes?|waffles?|cereal|granola bowl|oatmeal|porridge|bagel (?:with|and) (?:cream cheese|lox)|smoothie bowl|french toast)\b/i;
+
+function findMealSlotContentViolation(meal) {
+  const text = [meal.name, meal.description].filter(Boolean).join(" ");
+  if (meal.type === "Lunch" || meal.type === "Dinner") {
+    const m = text.match(APPETIZER_MEAL_PATTERN);
+    if (m) return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is appetizer/small-plate scale, not a complete ${meal.type}` };
+    const bm = text.match(BREAKFAST_STYLE_AT_DINNER_PATTERN);
+    if (bm) return { code: "MEAL_SLOT_CONTENT", detail: `"${bm[0]}" is a breakfast-style dish, not appropriate for ${meal.type}` };
+  }
+  if (meal.type === "Breakfast") {
+    const m = text.match(DINNER_STYLE_AT_BREAKFAST_PATTERN);
+    if (m) return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is a lunch/dinner-style dish, not appropriate for Breakfast` };
+  }
+  return null;
+}
+
+// Structural slot counts expected per day — kept in sync with the same goal
+// logic buildAllDaysPrompt itself is built from.
+function getExpectedMealStructure(ctx) {
+  if (!ctx.calorieTarget && !ctx.gainTarget && ctx.maintenanceTarget) {
+    return { breakfast: 1, lunch: 1, dinner: 1, snackMin: 2, snackMax: 2 };
+  }
+  if (ctx.gainTarget) return { breakfast: 1, lunch: 1, dinner: 1, snackMin: 2, snackMax: 4 };
+  return { breakfast: 1, lunch: 1, dinner: 1, snackMin: 1, snackMax: 2 };
+}
+
+function findDayStructureViolations(meals, expected) {
+  const violations = [];
+  const counts = { Breakfast: 0, Lunch: 0, Dinner: 0, Snack: 0 };
+  for (const m of meals || []) { if (counts[m.type] !== undefined) counts[m.type]++; }
+  if (counts.Breakfast !== expected.breakfast) violations.push({ code: "MEAL_SLOT_STRUCTURE", detail: `expected ${expected.breakfast} Breakfast, got ${counts.Breakfast}` });
+  if (counts.Lunch !== expected.lunch) violations.push({ code: "MEAL_SLOT_STRUCTURE", detail: `expected ${expected.lunch} Lunch, got ${counts.Lunch}` });
+  if (counts.Dinner !== expected.dinner) violations.push({ code: "MEAL_SLOT_STRUCTURE", detail: `expected ${expected.dinner} Dinner, got ${counts.Dinner}` });
+  if (counts.Snack < expected.snackMin || counts.Snack > expected.snackMax) {
+    violations.push({ code: "MEAL_SLOT_STRUCTURE", detail: `expected ${expected.snackMin}-${expected.snackMax} Snack(s), got ${counts.Snack}` });
   }
   return violations;
 }
 
-// Asks the model to replace ONE meal that failed the allergen guard, naming
-// the exact banned term(s) found so the correction is targeted rather than a
-// generic "try again". Falls back to the original meal if this also fails.
-async function regenerateCompliantMeal(meal, violations, dietRules, kitchenAccessBlock) {
-  const prompt = `Revise this ONE meal — it violates a dietary restriction and must be replaced.
+// ─── F. KITCHEN ACCESS ────────────────────────────────────────────────────
+const KITCHEN_PREP_METHOD_ALLOW = {
+  full_kitchen: ["no_cook", "microwave", "stove_oven"],
+  hotel: ["no_cook"],
+  microwave: ["no_cook", "microwave"],
+  fridge: ["no_cook"],
+  airplane_food: ["airplane_provided"],
+};
+
+function findMealKitchenViolation(meal, kitchenList) {
+  const list = (Array.isArray(kitchenList) ? kitchenList : [kitchenList]).filter(Boolean);
+  if (list.length === 0) return null;
+  // Multi-access days (e.g. hotel + airplane_food) — a meal is fine as long
+  // as its prep_method is realistic under AT LEAST ONE of the day's access
+  // types (matches the "apply whichever single type fits" prompt rule).
+  const allowedAcrossDay = new Set(list.flatMap(k => KITCHEN_PREP_METHOD_ALLOW[k] || []));
+  if (allowedAcrossDay.size === 0) return null;
+  if (!allowedAcrossDay.has(meal.prep_method)) {
+    return { code: "KITCHEN", detail: `prep_method "${meal.prep_method}" isn't achievable with kitchen access [${list.join(", ")}]` };
+  }
+  return null;
+}
+
+// ─── G. CUSTOMS / CARRIED FOOD ────────────────────────────────────────────
+// Deliberately conservative: only the categories that are unambiguous across
+// every BORDER_COUNTRY_RULES entry (fresh produce, raw meat, raw egg). A
+// meal is exempt if its own tip matches the "buy locally / consume before
+// next flight" phrasing the prompt already instructs the model to use for
+// same-stop, non-carried meals (see buildCarriedFoodPromptBlock).
+const CARRIED_BAN_CATEGORY_PATTERNS = [
+  /\bfresh (fruit|vegetables?|produce)\b/i,
+  /\b(apples?|oranges?|mangoe?s?|bananas?|grapes?|berr(?:y|ies)|peaches?|pears?)\b/i,
+  /\braw (chicken|beef|pork|meat|fish|eggs?)\b/i,
+  /\b(uncooked|unpasteurized) (meat|dairy|milk|cheese)\b/i,
+];
+const LOCALLY_PURCHASED_TIP_PATTERN = /buy locally|consume before|do not pack|eat before the next flight/i;
+
+function findMealCustomsViolation(meal, restrictedBorders) {
+  if (!restrictedBorders || restrictedBorders.length === 0) return null;
+  if (meal.prep_method === "airplane_provided") return null; // airline-catered, not personally carried
+  if (LOCALLY_PURCHASED_TIP_PATTERN.test(meal.tip || "")) return null;
+  const ingredientNames = (meal.ingredients || []).map(i => (typeof i === "string" ? i : i?.name)).filter(Boolean);
+  for (const pattern of CARRIED_BAN_CATEGORY_PATTERNS) {
+    const hit = ingredientNames.find(n => pattern.test(n));
+    if (hit) return { code: "CUSTOMS", detail: `"${hit}" likely can't be carried across this pairing's restricted borders` };
+  }
+  return null;
+}
+
+function computeMealCost(meal) {
+  return typeof meal.estimated_cost === "number" ? meal.estimated_cost : 0;
+}
+
+// Validates ONE already-generated day's meals against every constraint
+// category. Violations with a mealIndex are individually repairable (swap
+// just that meal); violations without one are about the COMBINATION of
+// meals (slot counts, day total) and need a full day regeneration.
+function validateDay(meals, { requiredAllergenTags, customAllergyTerm, activeDietTags, expectedStructure, calorieTarget, calorieTolerance, perDayBudget, kitchenList, restrictedBorders }) {
+  const violations = [];
+
+  (meals || []).forEach((meal, mealIndex) => {
+    for (const v of findMealAllergenViolations(meal, requiredAllergenTags, customAllergyTerm)) {
+      violations.push({ ...v, mealIndex, mealType: meal.type, mealName: meal.name });
+    }
+    for (const v of findMealDietViolations(meal, activeDietTags)) {
+      violations.push({ ...v, mealIndex, mealType: meal.type, mealName: meal.name });
+    }
+    const slotV = findMealSlotContentViolation(meal);
+    if (slotV) violations.push({ ...slotV, mealIndex, mealType: meal.type, mealName: meal.name });
+    const kitchenV = findMealKitchenViolation(meal, kitchenList);
+    if (kitchenV) violations.push({ ...kitchenV, mealIndex, mealType: meal.type, mealName: meal.name });
+    const customsV = findMealCustomsViolation(meal, restrictedBorders);
+    if (customsV) violations.push({ ...customsV, mealIndex, mealType: meal.type, mealName: meal.name });
+  });
+
+  for (const v of findDayStructureViolations(meals, expectedStructure)) violations.push(v);
+
+  // D. CALORIES — the displayed total is always the actual sum of meals
+  // (rescaleMealsToTarget guarantees this by construction, see below), and
+  // that sum must land within tolerance of the target.
+  const totalCalories = (meals || []).reduce((s, m) => s + (m.calories || 0), 0);
+  if (calorieTarget) {
+    const diff = Math.abs(totalCalories - calorieTarget) / calorieTarget;
+    if (diff > calorieTolerance) {
+      violations.push({ code: "CALORIES", detail: `total ${totalCalories} kcal vs target ${calorieTarget} kcal (${(diff * 100).toFixed(1)}% off, tolerance ${(calorieTolerance * 100).toFixed(0)}%)` });
+    }
+  }
+
+  // E. BUDGET
+  if (perDayBudget) {
+    const totalCost = (meals || []).reduce((s, m) => s + computeMealCost(m), 0);
+    if (totalCost > perDayBudget) {
+      violations.push({ code: "BUDGET", detail: `total $${totalCost.toFixed(2)} exceeds day budget $${perDayBudget.toFixed(2)}` });
+    }
+  }
+
+  // C (numeric part) — low-carb daily ceiling.
+  if (activeDietTags.includes("low_carb")) {
+    const totalCarbs = (meals || []).reduce((s, m) => s + (m.carbs || 0), 0);
+    if (totalCarbs > LOW_CARB_DAILY_LIMIT_G + 5) {
+      violations.push({ code: "DIET", dietTag: "low_carb", detail: `total ${totalCarbs}g carbs exceeds ${LOW_CARB_DAILY_LIMIT_G}g/day limit` });
+    }
+  }
+
+  return { valid: violations.length === 0, violations };
+}
+
+// Public entry point: validatePlan(plan, userProfile). `plan` = { days: [{
+// meals }, ...] }. `userProfile` = the raw request `data` object (same shape
+// /api/generate-plan receives) — this is the single source of truth for
+// whether a plan is allowed to reach a client.
+function validatePlan(plan, userProfile, lang = "en") {
+  const days = plan?.days || [];
+  const pairingDays = days.length || 1;
+  const ctx = buildContext(userProfile, lang, pairingDays);
+  const { tags: requiredAllergenTags, customAllergyTerm } = getUserRequiredAllergenAvoidance(userProfile);
+  const rawDiets = Array.isArray(userProfile.diets) ? userProfile.diets : (userProfile.diet ? [userProfile.diet] : []);
+  const activeDietTags = rawDiets.filter(d => DIET_PROHIBITED[d] || d === "kosher" || d === "low_carb");
+  const expectedStructure = getExpectedMealStructure(ctx);
+  const calorieTarget = ctx.calorieTarget ?? ctx.gainTarget ?? ctx.maintenanceTarget ?? null;
+  const calorieTolerance = ctx.maintenanceTarget && !ctx.calorieTarget && !ctx.gainTarget ? 0.15 : 0.10;
+
+  const allViolations = [];
+  days.forEach((day, i) => {
+    const dayNum = day.day || i + 1;
+    const rawKitchen = Array.isArray(userProfile.kitchen_by_day)
+      ? (userProfile.kitchen_by_day[dayNum - 1] || userProfile.kitchen || [])
+      : (userProfile.kitchen || []);
+    const kitchenList = Array.isArray(rawKitchen) ? rawKitchen : (rawKitchen ? [rawKitchen] : []);
+    const { violations } = validateDay(day.meals, {
+      requiredAllergenTags, customAllergyTerm, activeDietTags, expectedStructure,
+      calorieTarget, calorieTolerance, perDayBudget: ctx.perDayBudget, kitchenList,
+      restrictedBorders: ctx.restrictedBorders,
+    });
+    for (const v of violations) allViolations.push({ ...v, day: dayNum });
+  });
+
+  return { valid: allViolations.length === 0, violations: allViolations };
+}
+
+// ─── Repair ────────────────────────────────────────────────────────────────
+function describeMealViolation(v) {
+  switch (v.code) {
+    case "ALLERGEN":
+      return v.source === "user"
+        ? `Contains "${v.detail}" — the crew member has personally flagged this as something they cannot eat.`
+        : `Contains/implies "${v.detail}" (detected via ${v.source}) which matches the user's required allergen avoidance "${v.tag}" — strictly forbidden, including this hidden/derivative form.`;
+    case "DIET": return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
+    case "MEAL_SLOT_CONTENT": return v.detail;
+    case "KITCHEN": return v.detail;
+    case "CUSTOMS": return v.detail;
+    default: return v.detail;
+  }
+}
+
+// Regenerates ONE meal that failed validation, naming every specific problem
+// found so the correction is targeted rather than a generic "try again".
+// Returns null (not the stale meal) on failure, so the caller can tell
+// "still broken" apart from "unchanged" — the repair loop must never
+// silently keep serving a violating meal just because regeneration errored.
+async function regenerateMealForViolations(meal, violations, dietRules, kitchenAccessBlock) {
+  const problems = violations.map((v, i) => `${i + 1}. ${describeMealViolation(v)}`).join("\n");
+  const prompt = `Revise this ONE meal — it failed automated validation and must be replaced.
 
 ORIGINAL MEAL: ${JSON.stringify({ name: meal.name, description: meal.description })}
-VIOLATION: contains "${violations.map(v => v.term).join('", "')}", which is not allowed under this rule:
+
+PROBLEMS FOUND (fix EVERY one of them):
+${problems}
 
 ${dietRules}
 
 ${kitchenAccessBlock}
 
-Generate a REPLACEMENT ${meal.type} meal that fully complies with the rule above and the kitchen access constraints, keeping calories close to ${meal.calories} kcal. Include an "ingredients" array listing each distinct ingredient by short name. Return ONLY the meal JSON — no violating ingredient anywhere in the name, description, tip, or ingredients.`;
+Generate a REPLACEMENT ${meal.type} meal that fixes every problem above, still fully complies with the diet and kitchen constraints, and keeps calories close to ${meal.calories} kcal. List EVERY ingredient (nothing omitted, however small) in "ingredients", and make sure "allergens_present" and "diet_tags" accurately reflect the NEW ingredients — do not carry over the old meal's values. Return ONLY the meal JSON.`;
   try {
-    const replacement = await runStructured(prompt, MEAL_SCHEMA, 700, FAST_MODEL);
+    const replacement = await runStructured(prompt, MEAL_SCHEMA, 900, FAST_MODEL);
     return { ...replacement, type: meal.type };
   } catch (e) {
-    console.error(`[allergen-guard] regeneration failed for "${meal.name}": ${e.message}`);
-    return meal;
+    console.error(`[validator-repair] regeneration failed for "${meal.name}": ${e.message}`);
+    return null;
   }
-}
-
-// Deterministic post-generation safety net: checks every meal in every day
-// against the crew member's allergen selections and regenerates (once) any
-// meal that violates one. Runs on bank hits and cache hits too, since those
-// may have been produced before this guard existed.
-async function applyAllergenGuard(days, data, ctx) {
-  const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
-  const activeDiets = rawDiets.filter(d => ALLERGEN_RULES[d] || d === "kosher");
-  const customAllergyTerm = rawDiets.includes("allergy_other")
-    ? (data.allergy_other_text || "").trim().slice(0, 100)
-    : "";
-  if (activeDiets.length === 0 && !customAllergyTerm) return days;
-
-  let violationCount = 0;
-  const guardedDays = await Promise.all(days.map(async (day) => {
-    if (!day?.meals) return day;
-    const meals = await Promise.all(day.meals.map(async (meal) => {
-      const violations = findMealAllergenViolations(meal, activeDiets, customAllergyTerm);
-      if (violations.length === 0) return meal;
-      violationCount++;
-      console.warn(`[allergen-guard] "${meal.name}" violates ${violations.map(v => `${v.diet}("${v.term}")`).join(", ")} — regenerating`);
-      const replacement = await regenerateCompliantMeal(meal, violations, ctx.dietRules, ctx.kitchenAccessBlock);
-      const stillViolating = findMealAllergenViolations(replacement, activeDiets, customAllergyTerm);
-      if (stillViolating.length > 0) {
-        console.error(`[allergen-guard] "${replacement.name}" STILL violates ${stillViolating.map(v => v.diet).join(", ")} after regeneration — serving anyway, flag for review`);
-      }
-      return replacement;
-    }));
-    return { ...day, meals };
-  }));
-
-  if (violationCount > 0) console.log(`[allergen-guard] corrected ${violationCount} meal(s) across ${days.length} day(s)`);
-  return guardedDays;
-}
-
-// "Dinner should be a substantial main, not an appetizer" survived two rounds
-// of explicit prompt prohibition (including naming "beef carpaccio" directly)
-// and still recurred — especially for low_carb, which pulls toward
-// cheese/cured-meat ingredients that happen to compose into appetizer plates.
-// Same treatment as the allergen guard: a deterministic keyword check +
-// one corrective regeneration pass, rather than relying purely on the prompt.
-const APPETIZER_MEAL_PATTERN = /\b(carpaccio|charcuterie|antipasto|tartare|crudo)\b|\b(cheese|charcuterie|cured meat|cold cuts?)\s+(plate|platter|board)\b|\bprosciutto-wrapped\b/i;
-
-// Only Lunch/Dinner are checked — the same dish (e.g. a cheese plate) is a
-// perfectly normal Snack, and Breakfast has its own separate rules.
-function findMealSubstanceViolation(meal) {
-  if (meal.type !== "Lunch" && meal.type !== "Dinner") return null;
-  const text = [meal.name, meal.description].filter(Boolean).join(" ");
-  const match = text.match(APPETIZER_MEAL_PATTERN);
-  return match ? match[0] : null;
-}
-
-async function regenerateSubstantialMeal(meal, violationTerm, dietRules, kitchenAccessBlock) {
-  const prompt = `Revise this ONE meal — it's an appetizer-scale dish standing in as a full ${meal.type}, which isn't allowed.
-
-ORIGINAL MEAL: ${JSON.stringify({ name: meal.name, description: meal.description })}
-PROBLEM: "${violationTerm}" is an appetizer/small-plate style dish (carpaccio, charcuterie/cheese board, tartare, etc.), not a complete meal.
-
-${dietRules}
-
-${kitchenAccessBlock}
-
-Generate a REPLACEMENT ${meal.type} meal that is a substantial, complete main course — a cooked protein plus a cooked starch/grain/vegetable side, portioned as a full meal — while still complying with the diet and kitchen constraints above, keeping calories close to ${meal.calories} kcal. Include an "ingredients" array listing each distinct ingredient by short name. Return ONLY the meal JSON.`;
-  try {
-    const replacement = await runStructured(prompt, MEAL_SCHEMA, 700, FAST_MODEL);
-    return { ...replacement, type: meal.type };
-  } catch (e) {
-    console.error(`[meal-substance-guard] regeneration failed for "${meal.name}": ${e.message}`);
-    return meal;
-  }
-}
-
-// Deterministic post-generation safety net: checks every Lunch/Dinner meal
-// for the appetizer-as-a-meal pattern and regenerates (once) any violator.
-// Runs on bank hits and cache hits too, since those may predate this guard.
-async function applyMealSubstanceGuard(days, ctx) {
-  let violationCount = 0;
-  const guardedDays = await Promise.all(days.map(async (day) => {
-    if (!day?.meals) return day;
-    const meals = await Promise.all(day.meals.map(async (meal) => {
-      const violationTerm = findMealSubstanceViolation(meal);
-      if (!violationTerm) return meal;
-      violationCount++;
-      console.warn(`[meal-substance-guard] "${meal.name}" (${meal.type}) is appetizer-scale ("${violationTerm}") — regenerating`);
-      const replacement = await regenerateSubstantialMeal(meal, violationTerm, ctx.dietRules, ctx.kitchenAccessBlock);
-      const stillViolating = findMealSubstanceViolation(replacement);
-      if (stillViolating) {
-        console.error(`[meal-substance-guard] "${replacement.name}" STILL appetizer-scale after regeneration — serving anyway, flag for review`);
-      }
-      return replacement;
-    }));
-    return { ...day, meals };
-  }));
-  if (violationCount > 0) console.log(`[meal-substance-guard] corrected ${violationCount} meal(s) across ${days.length} day(s)`);
-  return guardedDays;
 }
 
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
@@ -974,7 +1214,19 @@ function getSingleDietBlock(diet, calorieTarget, data) {
 
 // Accepts a single diet string or an array of diets (multi-select).
 function getDietRules(rawDiet, calorieTarget, data) {
-  const FOOTER = `\nCRITICAL: Check every ingredient against the rules above before finalizing each meal. Replace any violating item. Full compliance required — no partial exceptions.`;
+  // This prompt text is a SUPPORT for the server-side hard validator
+  // (validatePlan / findMealAllergenViolations etc.), not a substitute for
+  // it — every meal is checked deterministically after generation, and
+  // rejected/regenerated if it violates anything below, regardless of how
+  // well this text is followed. Being explicit here just reduces how often
+  // that repair loop has to run.
+  const FOOTER = `\nCRITICAL — READ CAREFULLY:
+- Check every ingredient against the rules above before finalizing each meal. Replace any violating item. Full compliance required — no partial exceptions.
+- Allergies/intolerances above are ABSOLUTE PROHIBITIONS, not preferences — this includes HIDDEN and DERIVATIVE forms, not just the obvious word. Examples: dairy/milk -> also butter, cream, cheese, yogurt, whey, casein, ghee, custard, ricotta, mascarpone. Egg -> also mayonnaise, meringue, hollandaise, aioli. Soy -> also tofu, edamame, miso, soy sauce, tamari, soy lecithin. Wheat/gluten -> also flour, breadcrumbs, panko, semolina, couscous, seitan, bulgur, farro, regular soy sauce. Shellfish -> also oyster sauce, shrimp paste, fish sauce made with shellfish. Tree nuts/peanuts -> also marzipan, praline, nut butters, pesto, nutella. Sesame -> also tahini, halva, hummus. If in doubt whether an ingredient is a hidden source of a banned allergen, LEAVE IT OUT.
+- List EVERY distinct ingredient in "ingredients", however minor (a sauce, a garnish, a seasoning blend) — an incomplete ingredients list is itself treated as a failure, because it's the primary signal used to check for allergens.
+- "allergens_present" must be the complete, honest set of major allergens this meal's ingredients touch (including hidden sources) — do not leave it empty just because the allergen isn't the main ingredient.
+- "estimated_cost" must be a realistic USD-equivalent estimate for this single portion, consistent with the BUDGET guidance above.
+- "prep_method" must accurately reflect what this exact meal needs (no_cook / microwave / stove_oven / airplane_provided) and must be achievable under the KITCHEN ACCESS constraints above — do not pick stove_oven for a meal assigned to a no-kitchen day.`;
 
   const diets = Array.isArray(rawDiet) ? rawDiet : (rawDiet ? [rawDiet] : []);
   const filtered = diets.filter(d => d && d !== "none");
@@ -1878,7 +2130,7 @@ app.post("/api/referral/use", async (req, res) => {
 // adding "ingredients" — every previously-cached meal was missing it).
 // Folded into every cache key so old entries become unreachable and get
 // freshly regenerated under the current schema/prompt.
-const CACHE_SCHEMA_VERSION = "v7";
+const CACHE_SCHEMA_VERSION = "v8";
 
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
@@ -1958,6 +2210,11 @@ async function markDaysSeen(email, dayIds) {
 
 // ─────────────────────────────────────────────────────────────────
 
+// How many extra validate-then-regenerate passes a single day gets before
+// generation gives up on it entirely (returns null / marks it failed)
+// rather than ever serving a plan that failed validation.
+const REPAIR_ATTEMPTS = 2;
+
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   // Tracks whether reservePairingUsage actually consumed a non-premium
   // user's free slot for THIS request, so a later failure (calorie_deficit
@@ -1990,7 +2247,21 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     ].join("|");
     // Skip the bank when any restricted border is in the pairing — bank entries were
     // generated without carried-food constraints and may include prohibited items.
-    const bankEntries = ctx.restrictedBorders.length === 0 ? (PLAN_BANK_MAP[bankLookupKey] || []) : [];
+    const rawBankEntries = ctx.restrictedBorders.length === 0 ? (PLAN_BANK_MAP[bankLookupKey] || []) : [];
+    // Bank entries are pre-generated offline (generate-bank.js) and must clear
+    // the SAME hard validator as freshly-generated content before they're
+    // trusted — being pre-generated is not a validation exemption. Any entry
+    // that fails is discarded here, BEFORE reservePairingUsage is called, so
+    // execution falls through to normal AI generation exactly as if the bank
+    // had missed (no double-reservation risk from validating after the slot
+    // is already consumed).
+    const bankEntries = rawBankEntries.filter(entry => {
+      const { valid, violations } = validatePlan({ days: entry.days.map((d, i) => ({ day: i + 1, meals: d.meals })) }, data, lang);
+      if (!valid) {
+        console.warn(`[bank] entry for ${bankLookupKey} failed validation, discarding: ${violations.map(v => `${v.code}(day${v.day}${v.mealName ? `,"${v.mealName}"` : ""})`).join(", ")}`);
+      }
+      return valid;
+    });
     if (bankEntries.length > 0) {
       // Atomic check-and-consume: closes the race where two concurrent
       // requests could both read "allowed" before either had incremented.
@@ -2013,14 +2284,11 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           pairingCount: usage.pairingCount - 1,
         });
       }
+      // Already validated (see rawBankEntries filter above) — no per-serve
+      // guard pass needed. Relabel deterministically since the bank's static
+      // "label" is always plain English regardless of lang.
       const entry = bankEntries[Math.floor(Math.random() * bankEntries.length)];
-      // Bank entries predate the allergen/meal-substance guards — check them too before serving.
-      const allergenGuardedBankDays = await applyAllergenGuard(entry.days, data, ctx);
-      const substanceGuardedBankDays = await applyMealSubstanceGuard(allergenGuardedBankDays, ctx);
-      // Bank entries also predate the deterministic day-label fix — their static
-      // "label" is always plain English regardless of lang. Relabel the same way
-      // as freshly-generated days rather than trusting the stored value.
-      const guardedBankDays = substanceGuardedBankDays.map((d, i) => ({
+      const guardedBankDays = entry.days.map((d, i) => ({
         ...d,
         label: buildDayLabel(i + 1, ctx.destinations[i] || data.departure, lang),
       }));
@@ -2114,7 +2382,13 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       const missingCtx = buildContext(missingData, lang, pairingDays);
       console.log(`[calorie-debug] gender=${missingData.gender} weight=${missingData.weight} dob=${missingData.dob} age=${missingData.age} → maintenanceTarget=${missingCtx.maintenanceTarget} calorieTarget=${missingCtx.calorieTarget} gainTarget=${missingCtx.gainTarget} cacheKey.calorieTargetKey=${buildCacheKey(missingData, missingCtx, lang).calorieTargetKey}`);
 
-      const generateOneDay = (dayIndex) => {
+      // Generates ONE day, then validates + repairs it up to REPAIR_ATTEMPTS
+      // times before ever handing it back — this is the "model proposes, code
+      // validates, nothing unvalidated gets served" gate for freshly-generated
+      // content. Returns null only if the day still fails after every repair
+      // attempt, which the caller treats as a hard generation failure for
+      // that day (never a violating meal silently served).
+      const generateOneDay = async (dayIndex) => {
         const overallDayNum = cachedDays.length + dayIndex + 1;
         // Use per-day kitchen if provided; fall back to the shared kitchen setting.
         // Always coerce to array: kitchen_by_day[i] might be a string if the
@@ -2130,55 +2404,112 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         // if it were a single day's budget, e.g. "$300 total for 5 days" becomes
         // "$300/day" in this day's prompt instead of the correct $60/day.
         const dayCtx = buildContext(dayData, lang, pairingDays);
-        // 3200 tokens: multi-country customs tips can be verbose; 2200 caused
-        // the API to return a minimal 1-meal response when the output hit the cap.
-        return runStructured(
+
+        // 4200 tokens: the richer per-meal schema (structured ingredients,
+        // allergens_present, diet_tags, prep_method) plus verbose multi-country
+        // customs tips need more room than the old flat-string schema did.
+        const requestFreshDay = () => runStructured(
           buildAllDaysPrompt(dayData, 1, dayCtx, overallDayNum),
-          DAYS_SCHEMA, 3200, FAST_MODEL
+          DAYS_SCHEMA, 4200, FAST_MODEL
         ).then(r => {
           const meals = r?.days?.[0]?.meals;
           if (!meals || meals.length < 3) {
             throw new Error(`Day ${overallDayNum} returned only ${meals?.length ?? 0} meals`);
           }
-          return r;
+          return r.days[0];
         });
+
+        // Deterministic calorie guard: if the model's meal sum drifts outside
+        // the target ± tolerance, proportionally rescale so the total is
+        // guaranteed to land within band without an extra AI call. Runs after
+        // every fresh generation AND after every meal-level repair, since a
+        // swapped meal can shift the day's total.
+        const guardTarget = dayCtx.calorieTarget ?? dayCtx.gainTarget ?? dayCtx.maintenanceTarget;
+        const guardTolerance = dayCtx.maintenanceTarget ? 0.15 : 0.10;
+        const rescale = (meals) => guardTarget
+          ? rescaleMealsToTarget(meals, guardTarget, guardTolerance)
+          : { meals, totalCalories: meals.reduce((s, m) => s + (m.calories || 0), 0) };
+
+        const { tags: requiredAllergenTags, customAllergyTerm } = getUserRequiredAllergenAvoidance(dayData);
+        const rawDietsForDay = Array.isArray(dayData.diets) ? dayData.diets : (dayData.diet ? [dayData.diet] : []);
+        const activeDietTags = rawDietsForDay.filter(d => DIET_PROHIBITED[d] || d === "kosher" || d === "low_carb");
+        const validateOpts = {
+          requiredAllergenTags, customAllergyTerm, activeDietTags,
+          expectedStructure: getExpectedMealStructure(dayCtx),
+          calorieTarget: guardTarget, calorieTolerance: guardTolerance,
+          perDayBudget: dayCtx.perDayBudget, kitchenList: dayKitchen, restrictedBorders: dayCtx.restrictedBorders,
+        };
+
+        let raw;
+        try {
+          raw = await requestFreshDay();
+        } catch (e) {
+          console.warn(`[generate-plan] Day ${overallDayNum} initial generation failed: ${e.message} — retrying`);
+          try {
+            raw = await requestFreshDay();
+          } catch (e2) {
+            console.error(`[generate-plan] Day ${overallDayNum} failed after retry: ${e2.message}`);
+            return null;
+          }
+        }
+
+        let { meals, totalCalories } = rescale(raw.meals);
+        let violations = validateDay(meals, validateOpts).violations;
+
+        for (let attempt = 1; attempt <= REPAIR_ATTEMPTS && violations.length > 0; attempt++) {
+          for (const v of violations) {
+            console.warn(`[validator] day=${overallDayNum} attempt=${attempt} FAIL ${v.code} meal="${v.mealName ?? ""}" detail="${v.detail}"`);
+          }
+          const mealLevel = violations.filter(v => v.mealIndex !== undefined);
+          const dayLevel = violations.filter(v => v.mealIndex === undefined);
+
+          if (dayLevel.length > 0) {
+            // Structural/day-total problems are about the COMBINATION of
+            // meals — a single-meal swap can't fix them, regenerate the
+            // whole day fresh.
+            try {
+              raw = await requestFreshDay();
+              ({ meals, totalCalories } = rescale(raw.meals));
+            } catch (e) {
+              console.error(`[generate-plan] Day ${overallDayNum} repair regeneration failed: ${e.message}`);
+              break;
+            }
+          } else {
+            const byIndex = new Map();
+            for (const v of mealLevel) {
+              if (!byIndex.has(v.mealIndex)) byIndex.set(v.mealIndex, []);
+              byIndex.get(v.mealIndex).push(v);
+            }
+            const newMeals = await Promise.all(meals.map(async (meal, i) => {
+              if (!byIndex.has(i)) return meal;
+              const fixed = await regenerateMealForViolations(meal, byIndex.get(i), dayCtx.dietRules, dayCtx.kitchenAccessBlock);
+              return fixed || meal;
+            }));
+            ({ meals, totalCalories } = rescale(newMeals));
+          }
+          violations = validateDay(meals, validateOpts).violations;
+        }
+
+        if (violations.length > 0) {
+          for (const v of violations) {
+            console.error(`[validator] day=${overallDayNum} FAILED after ${REPAIR_ATTEMPTS} repair attempts — refusing to serve. ${v.code} meal="${v.mealName ?? ""}" detail="${v.detail}"`);
+          }
+          return null;
+        }
+
+        return { meals, totalCalories, label: raw.label, jetlagNote: raw.jetlagNote, hydrationNote: raw.hydrationNote ?? null };
       };
 
-      const dayResults = await Promise.all(
-        Array.from({ length: missing }, async (_, i) => {
-          try {
-            return await generateOneDay(i);
-          } catch (e) {
-            console.warn(`[generate-plan] Day ${cachedDays.length + i + 1} attempt 1 failed: ${e.message} — retrying`);
-            try {
-              return await generateOneDay(i);
-            } catch (e2) {
-              console.error(`[generate-plan] Day ${cachedDays.length + i + 1} failed after retry: ${e2.message}`);
-              return null;
-            }
-          }
-        })
-      );
+      const dayResults = await Promise.all(Array.from({ length: missing }, (_, i) => generateOneDay(i)));
 
       if (dayResults.every(r => r === null)) {
         throw Object.assign(new Error("Failed to generate meal plan after retries"), { status: 503 });
       }
 
-      // Server-side calorie guard: if the model's meal sum drifts outside the
-      // target ± 15 % we proportionally rescale all macros so the total is
-      // guaranteed to land within the band, without an extra AI call.
-      const guardTarget = missingCtx.calorieTarget ?? missingCtx.gainTarget ?? missingCtx.maintenanceTarget;
-      const guardTolerance = missingCtx.maintenanceTarget ? 0.15 : 0.10;
-      const aiDays = dayResults.map(r => {
-        if (!r) return null;
-        const raw = r.days[0];
-        const { meals, totalCalories } = guardTarget
-          ? rescaleMealsToTarget(raw.meals, guardTarget, guardTolerance)
-          : { meals: raw.meals, totalCalories: raw.meals.reduce((s, m) => s + m.calories, 0) };
-        return { meals, totalCalories, label: raw.label, jetlagNote: raw.jetlagNote, hydrationNote: raw.hydrationNote ?? null };
-      });
-
-      const successfulAiDays = aiDays.filter(d => d !== null);
+      // Only ever store days that already passed validatePlan-equivalent
+      // checks above — the cache must never become a second, unvalidated
+      // source of plans.
+      const successfulAiDays = dayResults.filter(d => d !== null);
       const stored = successfulAiDays.length > 0
         ? await storeCachedDays(successfulAiDays, cacheKey)
         : { ids: [] };
@@ -2186,7 +2517,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
       const allDays = [
         ...cachedDays.map(d => ({ meals: d.meals, totalCalories: d.totalCalories, label: null, jetlagNote: null, hydrationNote: null })),
-        ...aiDays,
+        ...dayResults,
       ];
       days = allDays.slice(0, pairingDays).map((d, i) => {
         const dayNum = i + 1;
@@ -2201,12 +2532,9 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           failed: d === null,
         };
       });
-      const failedCount = aiDays.filter(d => d === null).length;
+      const failedCount = dayResults.filter(d => d === null).length;
       console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${failedCount} failed extras=${cachedExtras ? "cache" : "ai"}`);
     }
-
-    days = await applyAllergenGuard(days, data, ctx);
-    days = await applyMealSubstanceGuard(days, ctx);
 
     const extras = await extrasPromise;
 
@@ -2347,9 +2675,12 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
     const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
     const ctx = buildContext(data, lang, pairingDays);
     const personalNote = `${ctx.dietRules}\n\nPERSONAL ALLERGY: The crew member has personally flagged "${excludeIngredient}" as something they cannot eat, separate from the diet rules above. Do not include it in any form.`;
-    const replacement = await regenerateCompliantMeal(
-      meal, [{ diet: "personal allergy", term: excludeIngredient }], personalNote, ctx.kitchenAccessBlock
+    const replacement = await regenerateMealForViolations(
+      meal, [{ code: "ALLERGEN", source: "user", detail: excludeIngredient }], personalNote, ctx.kitchenAccessBlock
     );
+    if (!replacement) {
+      return res.status(502).json({ error: "Could not update this meal. Please try again." });
+    }
     res.json({ meal: replacement });
   } catch (err) {
     handleAnthropicError(err, res);
@@ -3508,5 +3839,11 @@ if (!process.env.VERCEL) {
 // be exercised directly by regression tests without booting the server or
 // spending Anthropic/CRUD-backend calls. Keep this list to functions that are
 // safe to call with no environment configured.
-export { buildContext, getDietRules, getSingleDietBlock, hasGymEquipment, CACHE_SCHEMA_VERSION };
+export {
+  buildContext, getDietRules, getSingleDietBlock, hasGymEquipment, CACHE_SCHEMA_VERSION,
+  validatePlan, validateDay, findMealAllergenViolations, findMealDietViolations,
+  findMealSlotContentViolation, findMealKitchenViolation, findMealCustomsViolation,
+  getUserRequiredAllergenAvoidance, getExpectedMealStructure, ALLERGEN_DERIVATIVES,
+  USER_ALLERGY_TO_TAGS, DIET_PROHIBITED, KITCHEN_PREP_METHOD_ALLOW, MEAL_SCHEMA,
+};
 export default app;
