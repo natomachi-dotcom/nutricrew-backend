@@ -2,7 +2,7 @@
   "version": 1,
   "generated": "2026-07-02T17:15:29.652Z",
   "plans": {
-    "none|v6|none|none|full_kitchen|none|none|en|1": [
+    "none|v7|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This nutrition plan provides balanced macronutrients and sustained energy through protein-rich meals and whole grains, essential for maintaining alertness and cognitive function during flight operations. The variety of antioxidant-rich vegetables, omega-3 fatty acids from salmon, and probiotics from Greek yogurt supports immune function and gut health during the physiological stress of crew scheduling.",
@@ -142,7 +142,7 @@
         }
       }
     ],
-    "none|v6|none|none|full_kitchen|none|none|en|2": [
+    "none|v7|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This 2-day nutrition plan provides balanced macronutrients and sustained energy through whole grains, lean proteins, and nutrient-dense foods essential for maintaining alertness and cognitive function during flight operations. The variety of meals supports stable blood sugar levels, optimal hydration, and recovery, while emphasizing foods that minimize digestive disruption common in aviation crews.",
@@ -394,7 +394,7 @@
         }
       }
     ],
-    "none|v6|none|none|full_kitchen|none|none|en|3": [
+    "none|v7|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This 3-day nutrition plan provides balanced macronutrients with high-quality proteins, healthy fats, and complex carbohydrates to maintain steady energy levels and cognitive performance during flight operations. The variety of whole foods supports sustained alertness, muscle recovery, and stable blood sugar—critical for crew safety and well-being during multi-day pairings.",
@@ -742,7 +742,7 @@
         }
       }
     ],
-    "none|v6|none|none|hotel_no_kitchen|none|none|en|1": [
+    "none|v7|none|none|hotel|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This balanced 1-day crew nutrition plan delivers sustained energy through a mix of complex carbohydrates, lean proteins, and healthy fats, supporting alertness and recovery during flight operations. The no-cook requirement ensures meals are quick, stress-free, and safe to consume in hotel room settings without compromising nutritional quality.",
@@ -887,7 +887,7 @@
         }
       }
     ],
-    "none|v6|none|none|hotel_no_kitchen|none|none|en|2": [
+    "none|v7|none|none|hotel|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This nutrition plan provides balanced, nutrient-dense meals that support sustained energy and cognitive function for flight crew without requiring any cooking—critical for hotel room constraints. The combination of protein, healthy fats, and complex carbohydrates minimizes fatigue and maintains stable blood sugar during the 2-day pairing.",
@@ -1124,7 +1124,7 @@
         }
       }
     ],
-    "none|v6|none|none|hotel_no_kitchen|none|none|en|3": [
+    "none|v7|none|none|hotel|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This no-cook hotel room nutrition plan provides balanced macronutrients and sustained energy through pre-made proteins, whole grains, and healthy fats—essential for managing fatigue and maintaining cognitive performance during flight operations. The meal variety ensures crew members meet caloric and micronutrient needs while accommodating the constraint of limited kitchen facilities.",
@@ -1476,7 +1476,7 @@
         }
       }
     ],
-    "vegetarian|v6|none|none|full_kitchen|none|none|en|1": [
+    "vegetarian|v7|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegetarian nutrition plan provides sustained energy and cognitive support through balanced macronutrients, fiber-rich whole grains, and plant-based proteins essential for maintaining focus during flight duties. The meals are designed to prevent fatigue, stabilize blood sugar, and support digestive health during irregular flight schedules and time zone changes.",
@@ -1633,7 +1633,7 @@
         }
       }
     ],
-    "vegetarian|v6|none|none|full_kitchen|none|none|en|2": [
+    "vegetarian|v7|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegetarian nutrition plan provides sustained energy and mental clarity through balanced macronutrients, complex carbohydrates, and protein-rich sources essential for maintaining alertness during flight operations. The emphasis on whole grains, legumes, and antioxidant-rich vegetables supports cardiovascular health and reduces fatigue common in aviation crew scheduling.",
@@ -1891,7 +1891,7 @@
         }
       }
     ],
-    "vegetarian|v6|none|none|full_kitchen|none|none|en|3": [
+    "vegetarian|v7|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This vegetarian nutrition plan provides sustained energy and mental clarity for aviation crews through protein-rich legumes, whole grains, and healthy fats that stabilize blood sugar during irregular flight schedules. The variety of whole-food meals and nutrient-dense snacks supports cognitive function, reduces fatigue, and maintains digestive health during multi-day pairings.",
@@ -2260,7 +2260,7 @@
         }
       }
     ],
-    "vegetarian|v6|none|none|hotel_no_kitchen|none|none|en|1": [
+    "vegetarian|v7|none|none|hotel|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegetarian 1-day crew nutrition plan provides sustained energy through balanced macronutrients, combining complex carbohydrates, plant-based proteins, and healthy fats to maintain stable blood sugar and alertness during flight operations. All meals require no cooking and use shelf-stable or refrigerated items accessible in hotel rooms, ensuring crew can prepare nutritious food quickly without kitchen facilities.",
@@ -2401,7 +2401,7 @@
         }
       }
     ],
-    "vegetarian|v6|none|none|hotel_no_kitchen|none|none|en|2": [
+    "vegetarian|v7|none|none|hotel|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegetarian crew nutrition plan prioritizes sustained energy and hydration through nutrient-dense, no-cook meals that support alertness during flight operations while accommodating hotel room preparation limitations. The varied protein sources (Greek yogurt, legumes, nuts, cheese) and abundance of whole grains and vegetables provide stable blood sugar and cognitive function essential for aviation crew safety.",
@@ -2665,7 +2665,7 @@
         }
       }
     ],
-    "vegetarian|v6|none|none|hotel_no_kitchen|none|none|en|3": [
+    "vegetarian|v7|none|none|hotel|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This vegetarian crew nutrition plan prioritizes nutrient-dense, shelf-stable meals requiring zero cooking—perfect for hotel room confinement and maintaining steady energy during multi-day pairings. The balanced combination of plant proteins (legumes, yogurt, nuts), complex carbohydrates, and healthy fats supports sustained cognitive performance and reduces fatigue-related decision-making errors.",
@@ -3017,7 +3017,7 @@
         }
       }
     ],
-    "vegan|v6|none|none|full_kitchen|none|none|en|1": [
+    "vegan|v7|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegan crew nutrition plan delivers sustained energy through plant-based proteins (tofu, chickpeas, lentils) and complex carbohydrates, essential for maintaining alertness during flight operations. The balanced macronutrient distribution with healthy fats from almonds and nutrient-dense whole grains supports cognitive function, stable blood sugar, and physical endurance throughout your duty day.",
@@ -3162,7 +3162,7 @@
         }
       }
     ],
-    "vegan|v6|none|none|full_kitchen|none|none|en|2": [
+    "vegan|v7|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegan nutrition plan provides sustained energy through protein-rich plant-based sources like tofu, legumes, and nuts, essential for maintaining focus and alertness during flight operations. The balanced combination of complex carbohydrates, healthy fats, and fiber supports stable blood sugar levels and digestive health during irregular crew schedules.",
@@ -3420,7 +3420,7 @@
         }
       }
     ],
-    "vegan|v6|none|none|full_kitchen|none|none|en|3": [
+    "vegan|v7|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This fully vegan nutrition plan provides sustained energy, stable blood sugar, and optimal hydration for flight crew through plant-based proteins, complex carbohydrates, and nutrient-dense whole foods that support circadian rhythm management and reduce digestive stress during irregular schedules. The emphasis on fiber-rich legumes, healthy fats from nuts and seeds, and antioxidant-rich vegetables enhances cognitive function, reduces fatigue, and supports immune health during the physiological demands of aviation duty.",
@@ -3812,7 +3812,7 @@
         }
       }
     ],
-    "vegan|v6|none|none|hotel_no_kitchen|none|none|en|1": [
+    "vegan|v7|none|none|hotel|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This vegan crew nutrition plan provides sustained energy and hydration through whole-food carbohydrates, plant-based proteins, and healthy fats—essential for maintaining alertness and cognitive function during flight operations. The no-cook requirement ensures meals are logistically simple for hotel room preparation, minimizing food safety risks while meeting strict dietary requirements.",
@@ -3966,7 +3966,7 @@
         }
       }
     ],
-    "vegan|v6|none|none|hotel_no_kitchen|none|none|en|2": [
+    "vegan|v7|none|none|hotel|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This vegan crew nutrition plan provides balanced macronutrients with plant-based proteins, complex carbohydrates, and healthy fats to support energy levels and alertness during 2-day pairings without requiring kitchen facilities. All meals are no-cook or pre-made, designed for easy consumption in hotel rooms and during crew rest periods while maintaining consistent blood sugar and sustained energy.",
@@ -4232,7 +4232,7 @@
         }
       }
     ],
-    "vegan|v6|none|none|hotel_no_kitchen|none|none|en|3": [
+    "vegan|v7|none|none|hotel|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This plant-based crew nutrition plan provides sustained energy, stable blood sugar, and easy-to-digest meals that support alertness and minimize gastrointestinal stress during flight operations. All meals require zero cooking and utilize shelf-stable or refrigerated items ideal for hotel room consumption, ensuring compliance with rest protocols and fatigue management standards.",
@@ -4606,7 +4606,7 @@
         }
       }
     ],
-    "gluten_free|v6|none|none|full_kitchen|none|none|en|1": [
+    "gluten_free|v7|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This gluten-free crew nutrition plan provides sustained energy through complex carbohydrates, lean proteins, and healthy fats essential for maintaining alertness during flight operations. The nutrient-dense meals support cognitive function, stable blood sugar, and digestive comfort during irregular scheduling and time zone changes.",
@@ -4767,7 +4767,7 @@
         }
       }
     ],
-    "gluten_free|v6|none|none|full_kitchen|none|none|en|2": [
+    "gluten_free|v7|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This strictly gluten-free nutrition plan provides balanced macronutrients and sustained energy through complex carbohydrates, lean proteins, and healthy fats—essential for maintaining alertness and cognitive function during flight operations. The diverse meal options support stable blood sugar levels and include nutrient-dense foods that promote recovery and reduce fatigue during multi-day crew pairings.",
@@ -5017,7 +5017,7 @@
         }
       }
     ],
-    "gluten_free|v6|none|none|full_kitchen|none|none|en|3": [
+    "gluten_free|v7|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This strictly gluten-free nutrition plan provides balanced macronutrients and sustained energy for aviation crew through whole proteins, complex carbohydrates, and healthy fats across 15 diverse meals and snacks. The home kitchen preparation ensures complete control over cross-contamination risks while supporting alertness, digestion, and hydration critical for flight operations.",
@@ -5374,7 +5374,7 @@
         }
       }
     ],
-    "gluten_free|v6|none|none|hotel_no_kitchen|none|none|en|1": [
+    "gluten_free|v7|none|none|hotel|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This gluten-free crew nutrition plan delivers sustained energy and stable blood sugar throughout a 1-day pairing using whole proteins, complex carbohydrates, and healthy fats—essential for maintaining alertness and cognitive function during flight operations. The no-cook requirement ensures meal safety and convenience in hotel room settings while meeting strict gluten-free standards to prevent digestive issues that could compromise crew performance.",
@@ -5519,7 +5519,7 @@
         }
       }
     ],
-    "gluten_free|v6|none|none|hotel_no_kitchen|none|none|en|2": [
+    "gluten_free|v7|none|none|hotel|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This gluten-free crew nutrition plan delivers sustained energy and stable blood sugar across 2 days using portable, no-cook meals rich in protein and complex carbohydrates—essential for maintaining alertness during flight operations. The strategic combination of omega-3 sources, lean proteins, and whole grains supports cognitive function and fatigue management while accommodating strict celiac requirements without requiring kitchen facilities.",
@@ -5767,7 +5767,7 @@
         }
       }
     ],
-    "gluten_free|v6|none|none|hotel_no_kitchen|none|none|en|3": [
+    "gluten_free|v7|none|none|hotel|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This gluten-free nutrition plan is specifically designed for aviation crew operating from hotel rooms without cooking facilities, providing nutrient-dense, pre-made or cold-assembled meals that maintain steady energy and cognitive function during multi-day operations. The balanced macronutrient distribution across protein, complex carbohydrates, and healthy fats supports circadian rhythm management and prevents fatigue-related performance degradation common in aviation roles.",
@@ -6120,7 +6120,7 @@
         }
       }
     ],
-    "halal|v6|none|none|full_kitchen|none|none|en|1": [
+    "halal|v7|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This halal-certified nutrition plan provides sustained energy and cognitive function through balanced proteins, complex carbohydrates, and healthy fats essential for crew alertness and recovery. The diverse meal options support hydration, cardiovascular health, and stable blood sugar levels critical for managing flight fatigue and stress.",
@@ -6266,7 +6266,7 @@
         }
       }
     ],
-    "halal|v6|none|none|full_kitchen|none|none|en|2": [
+    "halal|v7|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This Halal-certified 2-day nutrition plan provides sustained energy through balanced macronutrients, complex carbohydrates, and high-quality proteins essential for maintaining alertness and cognitive function during flight operations. The diverse meal options ensure crew members remain properly hydrated and nourished while adhering to strict Halal dietary requirements throughout their pairing.",
@@ -6525,7 +6525,7 @@
         }
       }
     ],
-    "halal|v6|none|none|full_kitchen|none|none|en|3": [
+    "halal|v7|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This halal-certified crew nutrition plan provides balanced macronutrients from lean proteins, whole grains, and healthy fats to support sustained energy and cognitive function during flight operations. The nutrient-dense, anti-inflammatory meals featuring Mediterranean and Middle Eastern ingredients promote digestive health, stable blood sugar, and optimal hydration—critical factors for maintaining alertness and physical performance across multiple duty days.",
@@ -6882,7 +6882,7 @@
         }
       }
     ],
-    "halal|v6|none|none|hotel_no_kitchen|none|none|en|1": [
+    "halal|v7|none|none|hotel|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This halal-compliant nutrition plan provides high-protein, nutrient-dense meals optimized for crew alertness and sustained energy across a 1-day pairing, with all items requiring no cooking and suitable for hotel room preparation. The mix of lean proteins, healthy fats, and whole grains supports cardiovascular health and stable blood sugar while adhering strictly to halal dietary requirements.",
@@ -7030,7 +7030,7 @@
         }
       }
     ],
-    "halal|v6|none|none|hotel_no_kitchen|none|none|en|2": [
+    "halal|v7|none|none|hotel|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This halal crew nutrition plan delivers sustained energy through protein-rich meals and complex carbohydrates without requiring any cooking facilities, perfect for hotel room preparation during 2-day pairings. The balanced mix of chicken, lamb, fish, and beef with fresh vegetables and whole grains supports cognitive function and reduces fatigue during flight operations.",
@@ -7284,7 +7284,7 @@
         }
       }
     ],
-    "halal|v6|none|none|hotel_no_kitchen|none|none|en|3": [
+    "halal|v7|none|none|hotel|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This halal-certified 3-day crew nutrition plan provides balanced meals with lean proteins, complex carbohydrates, and healthy fats to maintain energy and focus during flight operations while accommodating no-cooking hotel room constraints. The pre-made and cold-assembled options minimize preparation time and food safety risks, allowing crews to prioritize rest and recovery between duty periods.",
@@ -7640,7 +7640,7 @@
         }
       }
     ],
-    "lactose_free|v6|none|none|full_kitchen|none|none|en|1": [
+    "lactose_free|v7|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This lactose-free nutrition plan provides sustained energy and cognitive support through balanced macronutrients, whole grains, lean proteins, and healthy fats essential for aviation crew stamina and alertness. The meals are strategically timed to maintain stable blood glucose levels and prevent fatigue during flight operations while respecting dietary restrictions.",
@@ -7791,7 +7791,7 @@
         }
       }
     ],
-    "lactose_free|v6|none|none|full_kitchen|none|none|en|2": [
+    "lactose_free|v7|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This lactose-free nutrition plan provides sustained energy and recovery support for flight crews through nutrient-dense whole foods, lean proteins, and complex carbohydrates that stabilize blood sugar during circadian disruptions. The emphasis on omega-3 rich fish, antioxidant-packed berries, and easily digestible meals supports cognitive function and reduces gastrointestinal stress common in aviation environments.",
@@ -8051,7 +8051,7 @@
         }
       }
     ],
-    "lactose_free|v6|none|none|full_kitchen|none|none|en|3": [
+    "lactose_free|v7|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This lactose-free nutrition plan provides sustained energy and cognitive performance for aviation crews through balanced macronutrients, complex carbohydrates, and omega-3 rich proteins essential for managing circadian disruption and fatigue. The mix of whole grains, lean proteins, healthy fats, and antioxidant-rich produce supports cardiovascular health, stable blood sugar, and mental clarity during demanding flight schedules.",
@@ -8419,7 +8419,7 @@
         }
       }
     ],
-    "lactose_free|v6|none|none|hotel_no_kitchen|none|none|en|1": [
+    "lactose_free|v7|none|none|hotel|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This lactose-free, no-cook nutrition plan provides balanced macronutrients and sustained energy throughout the day, essential for maintaining alertness and cognitive function during flight operations. The emphasis on pre-packaged, ready-to-eat meals maximizes convenience in hotel room constraints while delivering whole grains, lean protein, healthy fats, and antioxidant-rich fruits and vegetables.",
@@ -8562,7 +8562,7 @@
         }
       }
     ],
-    "lactose_free|v6|none|none|hotel_no_kitchen|none|none|en|2": [
+    "lactose_free|v7|none|none|hotel|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This lactose-free, no-cook meal plan is optimized for aviation crew maintaining stable energy and hydration during 2-day pairings while working with hotel room constraints. All meals are pre-made, cold-assembled, or ordered, ensuring consistent nutrition without kitchen equipment and reducing fatigue-related food preparation stress.",
@@ -8829,7 +8829,7 @@
         }
       }
     ],
-    "lactose_free|v6|none|none|hotel_no_kitchen|none|none|en|3": [
+    "lactose_free|v7|none|none|hotel|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This lactose-free crew nutrition plan emphasizes nutrient-dense, pre-packaged and cold-assembly meals that require no cooking, perfect for hotel room preparation during layovers. The balanced combination of lean proteins, complex carbohydrates, healthy fats, and antioxidant-rich produce supports sustained energy, mental clarity, and recovery for aviation professionals.",
@@ -9178,7 +9178,7 @@
         }
       }
     ],
-    "low_carb|v6|none|none|full_kitchen|none|none|en|1": [
+    "low_carb|v7|none|none|full_kitchen|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This low-carb crew nutrition plan stabilizes blood sugar and energy levels during flight operations, supporting sustained focus and alertness throughout the day. The protein-rich meals with healthy fats and nutrient-dense vegetables optimize cognitive function and reduce fatigue common in aviation crews.",
@@ -9321,7 +9321,7 @@
         }
       }
     ],
-    "low_carb|v6|none|none|full_kitchen|none|none|en|2": [
+    "low_carb|v7|none|none|full_kitchen|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This low-carb nutrition plan stabilizes blood sugar and energy levels during 2-day crew pairings, reducing fatigue and supporting consistent cognitive performance during flight operations. The protein-rich, whole-food approach with minimal processed carbohydrates aligns with aviation crew health protocols that emphasize sustained alertness and metabolic stability.",
@@ -9565,7 +9565,7 @@
         }
       }
     ],
-    "low_carb|v6|none|none|full_kitchen|none|none|en|3": [
+    "low_carb|v7|none|none|full_kitchen|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This low-carb crew nutrition plan maintains stable blood glucose and energy levels during flight operations while emphasizing protein and healthy fats to support alertness and recovery. The meal variety and portion-controlled snacks prevent energy crashes common in aviation schedules while staying well under 100g net carbs daily.",
@@ -9917,7 +9917,7 @@
         }
       }
     ],
-    "low_carb|v6|none|none|hotel_no_kitchen|none|none|en|1": [
+    "low_carb|v7|none|none|hotel|none|none|en|1": [
       {
         "pairingDays": 1,
         "summary": "This low-carb crew nutrition plan delivers sustained energy and mental clarity through protein-rich, nutrient-dense meals requiring zero cooking—ideal for hotel room preparation during tight crew schedules. Each meal maintains stable blood sugar and supports alertness during flight operations while accommodating the constraints of limited kitchen facilities.",
@@ -10056,7 +10056,7 @@
         }
       }
     ],
-    "low_carb|v6|none|none|hotel_no_kitchen|none|none|en|2": [
+    "low_carb|v7|none|none|hotel|none|none|en|2": [
       {
         "pairingDays": 2,
         "summary": "This low-carb, no-cook hotel room nutrition plan maintains stable blood sugar and sustained energy for flight crews by emphasizing protein-rich, fat-based meals that require zero kitchen equipment and pack efficiently. Pre-assembled meals and cold preparations minimize digestive load during flight cycles while meeting strict carbohydrate limits under 100g net carbs daily.",
@@ -10300,7 +10300,7 @@
         }
       }
     ],
-    "low_carb|v6|none|none|hotel_no_kitchen|none|none|en|3": [
+    "low_carb|v7|none|none|hotel|none|none|en|3": [
       {
         "pairingDays": 3,
         "summary": "This low-carb nutrition plan keeps blood sugar stable and energy consistent during 3-day crew pairings, critical for maintaining alertness and sleep quality in irregular schedules. All meals require no cooking and use shelf-stable or hotel-sourced items, making preparation effortless in limited hotel room kitchens while delivering high-quality protein and healthy fats for sustained performance.",

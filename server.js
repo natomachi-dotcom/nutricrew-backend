@@ -940,6 +940,13 @@ function getSingleDietBlock(diet, calorieTarget, data) {
 - Poultry max 2–3×/week; red meat at most once per pairing.
 - Dairy in moderation: small amounts of Greek yogurt, feta, Parmesan OK.
 - NO ultra-processed foods or fast food. No wine (aviation crew).`;
+    case "paleo":
+      return `DIET: PALEO — STRICT RULES:
+- NO grains (wheat, rice, oats, corn), legumes (beans, lentils, peanuts, soy), dairy, refined sugar, or processed/packaged foods.
+- YES: meat, poultry, fish/seafood, eggs, vegetables, fruit, nuts, seeds, and healthy fats/oils (olive, coconut, avocado).
+- Use natural sweeteners sparingly if needed (honey, maple syrup) — never refined sugar or artificial sweeteners.
+- Watch for hidden grains/legumes/dairy: soy sauce, most breads/pastas/tortillas, peanut butter, cheese, yogurt, breaded/battered items.
+- Build meals around a protein plus vegetables; use starchy vegetables (sweet potato, squash) in place of grains.`;
     case "carnivore":
       return `DIET: CARNIVORE — STRICT RULES:
 - ONLY animal products: meat, fish, eggs, butter/tallow/lard/ghee.
@@ -1871,7 +1878,7 @@ app.post("/api/referral/use", async (req, res) => {
 // adding "ingredients" — every previously-cached meal was missing it).
 // Folded into every cache key so old entries become unreachable and get
 // freshly regenerated under the current schema/prompt.
-const CACHE_SCHEMA_VERSION = "v6";
+const CACHE_SCHEMA_VERSION = "v7";
 
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
@@ -2099,7 +2106,12 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       // Partial or full cache miss — generate each missing day in parallel (EXTRAS also runs in parallel)
       const missing = pairingDays - cachedDays.length;
       const missingData = { ...data, pairing_days: missing };
-      const missingCtx = buildContext(missingData, lang, missing);
+      // Pass the TRUE total pairingDays here, not `missing` — perDayBudget for a
+      // "total" budget_type is budgetAmount/pairingDays, and this ctx's calorie/
+      // budget numbers feed the guard + prompts for the freshly-generated days,
+      // which must still divide the trip's total budget by the whole trip length,
+      // not just by how many days happened to miss the cache.
+      const missingCtx = buildContext(missingData, lang, pairingDays);
       console.log(`[calorie-debug] gender=${missingData.gender} weight=${missingData.weight} dob=${missingData.dob} age=${missingData.age} → maintenanceTarget=${missingCtx.maintenanceTarget} calorieTarget=${missingCtx.calorieTarget} gainTarget=${missingCtx.gainTarget} cacheKey.calorieTargetKey=${buildCacheKey(missingData, missingCtx, lang).calorieTargetKey}`);
 
       const generateOneDay = (dayIndex) => {
@@ -2112,7 +2124,12 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           : (missingData.kitchen || []);
         const dayKitchen = Array.isArray(rawKitchen) ? rawKitchen : (rawKitchen ? [rawKitchen] : []);
         const dayData = { ...missingData, kitchen: dayKitchen };
-        const dayCtx = buildContext(dayData, lang, 1);
+        // Same total-vs-local-count bug as missingCtx above: this ctx's perDayBudget
+        // must divide by the whole pairing's day count, not by "1" (this call only
+        // generates ONE day's meals) — otherwise a "total trip budget" gets used as
+        // if it were a single day's budget, e.g. "$300 total for 5 days" becomes
+        // "$300/day" in this day's prompt instead of the correct $60/day.
+        const dayCtx = buildContext(dayData, lang, pairingDays);
         // 3200 tokens: multi-country customs tips can be verbose; 2200 caused
         // the API to return a minimal 1-meal response when the output hit the cap.
         return runStructured(
@@ -3055,6 +3072,16 @@ const EXERCISE_LIBRARY = [
 
 const EXERCISE_NAME_LIST = EXERCISE_LIBRARY.map(e => e.name).join(", ");
 
+// Crew without a home kitchen (hotel or airplane food only) have no gym equipment.
+// "hotel" is the kitchen value sent by the frontend for its "Hotel (No Kitchen)"
+// option — "hotel_no_kitchen" is only the UI's translation label key, never the
+// actual value, so matching against it here always missed and let hotel-only
+// crew get told dumbbells were available.
+function hasGymEquipment(kitchen) {
+  const list = [].concat(kitchen || []);
+  return list.length > 0 && !list.every(k => ["hotel", "airplane_food"].includes(k));
+}
+
 const GYM_PLAN_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -3127,8 +3154,7 @@ app.post("/api/gym-plan/generate", apiLimiter, async (req, res) => {
     const goals = (profile?.goals || ["energy"]).join(", ");
     const gender = profile?.gender || "female";
     const kitchen = [].concat(profile?.kitchen || []);
-    // Crew without a home kitchen (hotel or airplane food only) have no gym equipment
-    const hasEquipment = kitchen.length > 0 && !kitchen.every(k => ["hotel_no_kitchen", "airplane_food"].includes(k));
+    const hasEquipment = hasGymEquipment(kitchen);
     const availableExercises = hasEquipment
       ? EXERCISE_NAME_LIST
       : EXERCISE_LIBRARY.filter(e => e.eq === "bw").map(e => e.name).join(", ");
@@ -3478,4 +3504,9 @@ if (!process.env.VERCEL) {
   });
 }
 
+// Named exports of pure/deterministic logic (no network, no Express) so it can
+// be exercised directly by regression tests without booting the server or
+// spending Anthropic/CRUD-backend calls. Keep this list to functions that are
+// safe to call with no environment configured.
+export { buildContext, getDietRules, getSingleDietBlock, hasGymEquipment, CACHE_SCHEMA_VERSION };
 export default app;

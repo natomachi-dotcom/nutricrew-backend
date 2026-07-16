@@ -20,6 +20,14 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-haiku-4-5-20251001";
 const OUT = "./plans-bank.json";
 
+// MUST match server.js's CACHE_SCHEMA_VERSION exactly, and MUST be bumped in
+// lockstep whenever that constant changes there — server.js's bankLookupKey
+// folds its own CACHE_SCHEMA_VERSION into the same key position this script
+// writes to. A mismatch here silently makes every entry this script produces
+// unreachable (this has already happened twice: once from a missing version
+// segment entirely, once from a stale "hotel_no_kitchen" kitchen key).
+const CACHE_SCHEMA_VERSION = "v7";
+
 // ─── SCHEMAS (must match server.js) ──────────────────────────────
 
 const MEAL_SCHEMA = {
@@ -112,7 +120,13 @@ const KITCHENS = [
     label: "Full home kitchen with stove, oven, and all standard cooking equipment.",
   },
   {
-    key: "hotel_no_kitchen",
+    // Must be "hotel" — this key becomes part of the plan-bank lookup key
+    // server.js builds from the live request's data.kitchen value, and the
+    // frontend's kitchen picker sends "hotel" (the string "hotel_no_kitchen"
+    // is only a UI translation label id, never a real value). Using the wrong
+    // string here previously left every hotel-kitchen bank entry silently
+    // unreachable — same failure mode as the "plan-bank key format" bug.
+    key: "hotel",
     label: "Hotel room only. NO stove, oven, or microwave. Meals must be pre-made, packaged, cold-assembled, or ordered from the hotel. No cooking.",
   },
 ];
@@ -217,16 +231,21 @@ async function main() {
 
   for (const diet of DIETS) {
     for (const kitchen of KITCHENS) {
-      const bankKey = `${diet.key}|none|none|${kitchen.key}|none|none|en`;
-      if (!plans[bankKey]) plans[bankKey] = [];
-
       for (const pairingDays of PAIRING_DAYS_LIST) {
         combo++;
+
+        // Key format must match server.js's bankLookupKey exactly — a live
+        // request's key is [dietKey|CACHE_SCHEMA_VERSION, goalKey, budgetLevel,
+        // kitchenKey, calorieTargetKey, cookingKey, lang, pairingDays].join("|"),
+        // one flat key PER pairing-day count (not one key holding a 1/2/3-day
+        // array — that was the original form of this exact bug).
+        const bankKey = `${diet.key}|${CACHE_SCHEMA_VERSION}|none|none|${kitchen.key}|none|none|en|${pairingDays}`;
+        if (!plans[bankKey]) plans[bankKey] = [];
 
         // Skip already-generated entries
         const exists = plans[bankKey].some(e => e.pairingDays === pairingDays);
         if (exists) {
-          console.log(`[${combo}/${totalCombos}] SKIP ${bankKey} | ${pairingDays}d (already exists)`);
+          console.log(`[${combo}/${totalCombos}] SKIP ${bankKey} (already exists)`);
           skipped++;
           continue;
         }
