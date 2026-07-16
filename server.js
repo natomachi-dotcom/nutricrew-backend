@@ -1134,6 +1134,19 @@ function buildContext(data, lang, pairingDays) {
   return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules, restrictedBorders };
 }
 
+// day.label is regenerated server-side rather than trusted from the model —
+// the model usually translates "Day N — Location" correctly, but sometimes
+// leaves the English word "Day" in place even when lang=fr/es (a compliance
+// slip, not something a regex fixup on the English word can catch once it's
+// already happened). Deterministic construction guarantees the label is
+// always in the right language, the same philosophy as the allergen/
+// meal-substance guards elsewhere in this file.
+const DAY_WORD = { en: "Day", fr: "Jour", es: "Día" };
+function buildDayLabel(dayNum, loc, lang) {
+  const word = DAY_WORD[lang] || DAY_WORD.en;
+  return loc ? `${word} ${dayNum} — ${loc}` : `${word} ${dayNum}`;
+}
+
 function buildAllDaysPrompt(data, pairingDays, ctx, startDayNum = 1) {
   const hydration = computeHydration(data);
   const daySpecs = Array.from({ length: pairingDays }, (_, i) => {
@@ -1996,7 +2009,14 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       const entry = bankEntries[Math.floor(Math.random() * bankEntries.length)];
       // Bank entries predate the allergen/meal-substance guards — check them too before serving.
       const allergenGuardedBankDays = await applyAllergenGuard(entry.days, data, ctx);
-      const guardedBankDays = await applyMealSubstanceGuard(allergenGuardedBankDays, ctx);
+      const substanceGuardedBankDays = await applyMealSubstanceGuard(allergenGuardedBankDays, ctx);
+      // Bank entries also predate the deterministic day-label fix — their static
+      // "label" is always plain English regardless of lang. Relabel the same way
+      // as freshly-generated days rather than trusting the stored value.
+      const guardedBankDays = substanceGuardedBankDays.map((d, i) => ({
+        ...d,
+        label: buildDayLabel(i + 1, ctx.destinations[i] || data.departure, lang),
+      }));
       // Fire-and-forget: seed the DB cache so repeat requests get fresh AI variety
       storeCachedDays(guardedBankDays, cacheKey)
         .then(r => { if (r.ids?.length) markDaysSeen(email, r.ids); })
@@ -2068,7 +2088,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       // Full cache hit — no DAYS API call needed
       days = cachedDays.slice(0, pairingDays).map((d, i) => ({
         day: i + 1,
-        label: `Day ${i + 1}`,
+        label: buildDayLabel(i + 1, ctx.destinations[i] || data.departure, lang),
         jetlagNote: null,
         hydrationNote: null,
         meals: d.meals,
@@ -2153,13 +2173,10 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       ];
       days = allDays.slice(0, pairingDays).map((d, i) => {
         const dayNum = i + 1;
-        // Model generates each day individually (pairingDays=1 per call) so it
-        // always labels itself "Day 1 — ...". Correct the prefix to match position.
-        const rawLabel = d?.label || `Day ${dayNum}`;
-        const label = rawLabel.replace(/^Day\s+\d+/i, `Day ${dayNum}`);
+        const loc = ctx.destinations[dayNum - 1] || data.departure;
         return {
           day: dayNum,
-          label,
+          label: buildDayLabel(dayNum, loc, lang),
           jetlagNote: d?.jetlagNote || null,   // || catches empty string from model
           hydrationNote: d?.hydrationNote || null,
           meals: d?.meals || null,
