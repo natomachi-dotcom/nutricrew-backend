@@ -884,11 +884,20 @@ function findMealKitchenViolation(meal, kitchenList) {
 // same-stop, non-carried meals (see buildCarriedFoodPromptBlock).
 const CARRIED_BAN_CATEGORY_PATTERNS = [
   /\bfresh (fruit|vegetables?|produce)\b/i,
-  /\b(apples?|oranges?|mangoe?s?|bananas?|grapes?|berr(?:y|ies)|peaches?|pears?)\b/i,
+  // "peach(?:es)?" not "peaches?" — the latter only matches "peache"/"peaches",
+  // never singular "peach" (the "?" only makes the trailing "s" optional).
+  /\b(apples?|oranges?|mangoe?s?|bananas?|grapes?|berr(?:y|ies)|peach(?:es)?|pears?)\b/i,
   /\braw (chicken|beef|pork|meat|fish|eggs?)\b/i,
   /\b(uncooked|unpasteurized) (meat|dairy|milk|cheese)\b/i,
 ];
 const LOCALLY_PURCHASED_TIP_PATTERN = /buy locally|consume before|do not pack|eat before the next flight/i;
+// The prompt explicitly instructs the model to use "ONLY commercially
+// packaged/sealed, canned, dried, or shelf-stable ingredients" for carried
+// items (see buildCarriedFoodPromptBlock) — a compliant "canned peaches in
+// light syrup" is exactly what it's supposed to produce, not a violation.
+// Production 504: this false positive triggered an unnecessary repair round
+// that pushed a real request over Vercel's function timeout.
+const SHELF_STABLE_QUALIFIER = /\b(canned|tinned|dried|dehydrated|jarred|vacuum-sealed|shelf-stable|freeze-dried|preserved|pickled)\b/i;
 
 function findMealCustomsViolation(meal, restrictedBorders, kitchenList) {
   if (!restrictedBorders || restrictedBorders.length === 0) return null;
@@ -908,7 +917,7 @@ function findMealCustomsViolation(meal, restrictedBorders, kitchenList) {
   if (isHomeCookedNonSnack) return null;
   const ingredientNames = (meal.ingredients || []).map(i => (typeof i === "string" ? i : i?.name)).filter(Boolean);
   for (const pattern of CARRIED_BAN_CATEGORY_PATTERNS) {
-    const hit = ingredientNames.find(n => pattern.test(n));
+    const hit = ingredientNames.find(n => pattern.test(n) && !SHELF_STABLE_QUALIFIER.test(n));
     if (hit) return { code: "CUSTOMS", detail: `"${hit}" likely can't be carried across this pairing's restricted borders` };
   }
   return null;
@@ -2250,7 +2259,14 @@ async function markDaysSeen(email, dayIds) {
 // How many extra validate-then-regenerate passes a single day gets before
 // generation gives up on it entirely (returns null / marks it failed)
 // rather than ever serving a plan that failed validation.
-const REPAIR_ATTEMPTS = 2;
+// Was 2; a production 504 (Vercel's 60s function limit, see vercel.json
+// maxDuration) showed a single day stacking the pre-existing "malformed
+// response, retry once" pass with a validator repair pass — up to 4
+// sequential AI round-trips for one day. Cut to 1 to bound worst-case
+// latency; a day that still fails after its one genuine repair attempt is
+// marked failed (see failedDays) rather than retried further within the
+// same request — better than timing out the whole request.
+const REPAIR_ATTEMPTS = 1;
 
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   // Tracks whether reservePairingUsage actually consumed a non-premium
