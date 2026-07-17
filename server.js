@@ -746,7 +746,12 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
 const MEAT_WORDS = /\b(beef|chicken|turkey|lamb|veal|duck|goose|pork|sausages?|bacon|hams?|pastrami|salami|jerky|meat|poultry|prosciutto|pepperoni|chorizo)\b/i;
 const HONEY_GELATIN_WORDS = /\b(honey|gelatine?)\b/i;
 const PORK_WORDS = /\b(pork|bacon|hams?|lard|prosciutto|pancetta|pepperoni|chorizo|salami|sausages?)\b/i;
-const ALCOHOL_WORDS = /\b(wine|beer|rum|vodka|whisk(?:e)?y|sake|sherry|marsala|liqueur|alcohol|brandy|champagne)\b/i;
+// Excludes "___ vinegar" compounds (red wine vinegar, sherry vinegar, rice
+// wine vinegar, ...) — vinegar-making converts the alcohol to acetic acid,
+// so it isn't the alcoholic beverage the halal ban is about. Found via
+// verification: a chimichurri's red wine vinegar was tripping a false
+// halal violation on an otherwise completely halal-compliant sauce.
+const ALCOHOL_WORDS = /\b(wine|beer|rum|vodka|whisk(?:e)?y|sake|sherry|marsala|liqueur|alcohol|brandy|champagne)\b(?!\s*vinegar)/i;
 const LACTOSE_PATTERN = /\b(milk|creams?|soft cheese|ice cream|yog?hurt)\b/i;
 // "butter" excludes nut/seed "___ butter" compounds — paleo explicitly
 // allows nuts/seeds (and their butters), so a bare \bbutter\b would wrongly
@@ -1473,7 +1478,7 @@ Dinner (and Lunch) must be a substantial, complete main course — protein + a s
 These meal-timing and portion rules apply IDENTICALLY to every day of a multi-day pairing — Day 1 and the LAST day are held to the exact same standard. When reaching for a new/different dish to satisfy the variety requirement below, never let that novelty pull Breakfast into lunch/dinner territory or shrink Dinner down to an appetizer — pick a different full-sized, time-appropriate dish instead.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
 Every meal must include a "tip" and an "emoji" field with 2–3 food emoji accurately representing the meal. Every meal must also include an "ingredients" array listing each distinct ingredient by short name (e.g. "eggs", "spinach", "feta cheese") — specific enough for a crew member to spot a personal allergen, not full recipe steps.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}${ctx.airplaneMealDesc ? `\nThe crew member has told us their airplane meal will include: "${ctx.airplaneMealDesc}". For any meal of type "airplane_food", describe how to complement or adapt this specific meal (e.g. add protein, skip the dessert, supplement with a snack). Plan the rest of the day's meals to balance the nutrients already provided by this airplane meal.` : ""}
-Vary meal choices across all days — different recipes, ingredients, and combinations each day — but variety must never come at the expense of the meal-timing/portion rules above, especially on the final day(s) of the pairing.
+Vary meal choices across all days — different recipes, ingredients, and combinations each day — but variety must never come at the expense of the meal-timing/portion rules above, especially on the final day(s) of the pairing. For grilled or roasted protein mains (Lunch/Dinner), use fresh herb sauces for variety where they fit the diet and kitchen access — e.g. chimichurri on steak/chicken, salsa verde, or a citrus vinaigrette — rather than defaulting to the same plain seasoning every time.
 
 Per-day instructions:
 ${daySpecs}
