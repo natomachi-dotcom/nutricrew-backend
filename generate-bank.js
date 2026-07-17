@@ -26,7 +26,7 @@ const OUT = "./plans-bank.json";
 // writes to. A mismatch here silently makes every entry this script produces
 // unreachable (this has already happened twice: once from a missing version
 // segment entirely, once from a stale "hotel_no_kitchen" kitchen key).
-const CACHE_SCHEMA_VERSION = "v8";
+const CACHE_SCHEMA_VERSION = "v9";
 
 // ─── SCHEMAS (must match server.js) ──────────────────────────────
 // server.js's hard validator (validatePlan) now runs against EVERY bank

@@ -627,7 +627,7 @@ const ALLERGEN_DERIVATIVES = {
   // verification found "Chicken Caesar Wrap ... parmesan" passing a
   // dairy-allergy check clean. Added explicitly rather than relying on the
   // generic word.
-  milk: /\b(milk|buttermilk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|cocoa|cacao|shea|sunflower|apple|nut|seed)\s)butter|cheeses?|parmesan|cheddar|mozzarella|brie|feta|gouda|provolone|camembert|gruy[eè]re|halloumi|manchego|goat cheese|cream cheese|cottage cheese|blue cheese|yog?hurt|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half)\b/i,
+  milk: /\b(milk|buttermilk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|cocoa|cacao|shea|sunflower|apple|nut|seed)\s)butter|cheeses?|parmesan|cheddar|mozzarella|brie|feta|gouda|provolone|camembert|gruy[eè]re|halloumi|manchego|goat cheese|cream cheese|cottage cheese|blue cheese|yogh?urt|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half)\b/i,
   eggs: /\b(eggs?|egg whites?|egg yolks?|albumin|albumen|ovalbumin|mayonnaise|mayo|hollandaise|b[ée]arnaise|meringue|frittata|quiche|french toast|egg wash|aioli)\b/i,
   fish: /\b(fish|anchov(?:y|ies)|fish sauce|worcestershire(?: sauce)?|bonito|dashi|salmon|tuna|cod|tilapia|sardines?|surimi|imitation crab)\b/i,
   shellfish: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|crawfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|shrimp paste)\b/i,
@@ -752,11 +752,11 @@ const PORK_WORDS = /\b(pork|bacon|hams?|lard|prosciutto|pancetta|pepperoni|chori
 // verification: a chimichurri's red wine vinegar was tripping a false
 // halal violation on an otherwise completely halal-compliant sauce.
 const ALCOHOL_WORDS = /\b(wine|beer|rum|vodka|whisk(?:e)?y|sake|sherry|marsala|liqueur|alcohol|brandy|champagne)\b(?!\s*vinegar)/i;
-const LACTOSE_PATTERN = /\b(milk|creams?|soft cheese|ice cream|yog?hurt)\b/i;
+const LACTOSE_PATTERN = /\b(milk|creams?|soft cheese|ice cream|yogh?urt)\b/i;
 // "butter" excludes nut/seed "___ butter" compounds — paleo explicitly
 // allows nuts/seeds (and their butters), so a bare \bbutter\b would wrongly
 // flag "almond butter" as the banned dairy butter.
-const PALEO_PROHIBITED = /\b(wheat|breads?|pasta|rice|oats|corn|barley|rye|beans?|lentils?|chickpeas?|peanuts?|soy|tofu|milk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|sunflower|seed)\s)butter|cheeses?|yog?hurt|refined sugar|white sugar|brown sugar|corn syrup)\b/i;
+const PALEO_PROHIBITED = /\b(wheat|breads?|pasta|rice|oats|corn|barley|rye|beans?|lentils?|chickpeas?|peanuts?|soy|tofu|milk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|sunflower|seed)\s)butter|cheeses?|yogh?urt|refined sugar|white sugar|brown sugar|corn syrup)\b/i;
 const FODMAP_PROHIBITED = /\b(onions?|garlic|wheat|beans?|lentils?|apples?|pears?|mango(?:es)?|watermelon|honey|high[- ]fructose corn syrup|soft cheese|cashews?|pistachios?)\b/i;
 const CARNIVORE_PLANT_HINT = /\b(vegetables?|fruit|grains?|rice|breads?|pasta|beans?|lentils?|nuts?|seeds?|sugar|vegetable oil|olive oil|potatoes?|salad|greens?)\b/i;
 
@@ -776,7 +776,7 @@ const DIET_PROHIBITED = {
 
 // Kosher's core rule isn't "banned ingredient present" like an allergy — it's
 // "meat and dairy never in the SAME meal", plus the usual no-pork/no-shellfish.
-const KOSHER_DAIRY_WORDS = /\b(cheeses?|milk|creams?|butter|yog?hurt|whey|ghee)\b/i;
+const KOSHER_DAIRY_WORDS = /\b(cheeses?|milk|creams?|butter|yogh?urt|whey|ghee)\b/i;
 
 function findMealDietViolations(meal, activeDietTags) {
   const violations = [];
@@ -808,12 +808,34 @@ const LOW_CARB_DAILY_LIMIT_G = 50;
 // ─── B. MEAL SLOT / STRUCTURE ─────────────────────────────────────────────
 // "Dinner should be a substantial main, not an appetizer" and "no dinner-
 // style dish under Breakfast" survived repeated explicit prompt prohibition
-// and still recurred — a keyword check on the actual proposed content is the
-// only way to catch it deterministically instead of trusting the model to
-// self-police its own slot.
+// and still recurred (production example: canned sardines served as
+// "Mediterranean Greek Yogurt Parfait" breakfast, twice in one pairing) —
+// a keyword check on the actual proposed content is the only way to catch
+// it deterministically instead of trusting the model to self-police its
+// own slot. The model optimizes for constraint satisfaction (diet tag +
+// macros) with no concept of what a human eats at a given time of day;
+// this table encodes that concept explicitly, per slot, in code.
 const APPETIZER_MEAL_PATTERN = /\b(carpaccio|charcuterie|antipasto|tartare|crudo)\b|\b(cheese|charcuterie|cured meat|cold cuts?)\s+(plate|platter|board)\b|\bprosciutto-wrapped\b/i;
-const DINNER_STYLE_AT_BREAKFAST_PATTERN = /\b(shawarma|kebabs?|curry|stir-?fry|burgers?|steaks?|schnitzel|tagine|casserole|lasagn?a|risotto|rice bowl|burritos?|tacos?|fajitas?|chili|pot pie|meatballs?|gyros?)\b/i;
-const BREAKFAST_STYLE_AT_DINNER_PATTERN = /\b(pancakes?|waffles?|cereal|granola bowl|oatmeal|porridge|bagel (?:with|and) (?:cream cheese|lox)|smoothie bowl|french toast)\b/i;
+// Canned/oily fish, shellfish, dense red meat, and dinner-format plated
+// dishes (stews, curries, pasta, rice-and-meat, casseroles) are never a
+// normal breakfast, regardless of how well they otherwise satisfy the
+// diet/macro targets — "smoked salmon on a bagel" IS a normal breakfast, so
+// salmon is deliberately NOT on this list; sardines/anchovies/mackerel/tuna
+// (typically eaten as a savory lunch/dinner protein or canned pantry item,
+// not a breakfast one) are.
+const DINNER_STYLE_AT_BREAKFAST_PATTERN = /\b(shawarma|kebabs?|curr(?:y|ies)|stir-?fry|burgers?|steaks?|schnitzel|tagine|casserole|lasagn?a|risotto|rice bowl|burritos?|tacos?|fajitas?|chili|pot pie|meatballs?|gyros?|sardines?|anchov(?:y|ies)|mackerel|tuna|shrimps?|prawns?|crabs?|lobsters?|scallops?|mussels?|oysters?|calamari|squid|roasts?|pot roasts?|stews?|pastas?|spaghettis?|penne|fettuccine|linguine|rice and (?:chicken|beef|pork|meat)|soups?)\b/i;
+// Congee (savory rice porridge) is a legitimate, common breakfast format —
+// exempt it from the bare "soup(s)" match above.
+const BREAKFAST_SOUP_EXEMPT_PATTERN = /congee/i;
+const BREAKFAST_STYLE_AT_DINNER_PATTERN = /\b(pancakes?|waffles?|cereal|granola bowl|oatmeal|overnight oats|porridge|bagel (?:with|and) (?:cream cheese|lox)|smoothie bowl|french toast)\b/i;
+// Dessert standing in as the ENTIRE meal (not a side/snack) isn't a lunch
+// or dinner, regardless of calories/macros.
+const DESSERT_AS_MEAL_PATTERN = /\b(cakes?|pies?|ice cream|cookies?|brownies?|cupcakes?)\b/i;
+// A "snack" that's actually a full dinner-format plated main defeats the
+// point of the slot — this is the inverse problem of the appetizer-as-
+// dinner check above (there, small-plate content in a main-meal slot is
+// wrong; here, main-meal content in a snack slot is wrong).
+const HEAVY_MAIN_AS_SNACK_PATTERN = /\b(roasts?|stews?|curr(?:y|ies)|casserole|lasagn?a|risotto|pot pie)\b/i;
 
 function findMealSlotContentViolation(meal) {
   const text = [meal.name, meal.description].filter(Boolean).join(" ");
@@ -822,10 +844,18 @@ function findMealSlotContentViolation(meal) {
     if (m) return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is appetizer/small-plate scale, not a complete ${meal.type}` };
     const bm = text.match(BREAKFAST_STYLE_AT_DINNER_PATTERN);
     if (bm) return { code: "MEAL_SLOT_CONTENT", detail: `"${bm[0]}" is a breakfast-style dish, not appropriate for ${meal.type}` };
+    const dm = text.match(DESSERT_AS_MEAL_PATTERN);
+    if (dm) return { code: "MEAL_SLOT_CONTENT", detail: `"${dm[0]}" is dessert standing in as the entire meal, not appropriate for ${meal.type}` };
   }
   if (meal.type === "Breakfast") {
     const m = text.match(DINNER_STYLE_AT_BREAKFAST_PATTERN);
-    if (m) return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is a lunch/dinner-style dish, not appropriate for Breakfast` };
+    if (m && !(/^soups?$/i.test(m[0]) && BREAKFAST_SOUP_EXEMPT_PATTERN.test(text))) {
+      return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is a lunch/dinner-style dish, not appropriate for Breakfast` };
+    }
+  }
+  if (meal.type === "Snack") {
+    const m = text.match(HEAVY_MAIN_AS_SNACK_PATTERN);
+    if (m) return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is a full dinner-format main, not appropriate for a Snack` };
   }
   return null;
 }
@@ -851,6 +881,181 @@ function findDayStructureViolations(meals, expected) {
     violations.push({ code: "MEAL_SLOT_STRUCTURE", detail: `expected ${expected.snackMin}-${expected.snackMax} Snack(s), got ${counts.Snack}` });
   }
   return violations;
+}
+
+// ─── CROSS-DAY VARIETY ─────────────────────────────────────────────────────
+// The sardines-at-breakfast bug repeated on consecutive days precisely
+// because nothing checked ACROSS days — each day is generated and validated
+// independently (in parallel, for latency). This is a deliberately small,
+// ordered list of PROTEIN/defining-component categories, checked by name
+// first (the most reliable "what this dish actually is" signal) and falling
+// back to ingredients — good enough to catch "the same hero twice in a row,"
+// which is the actual failure mode, without needing to solve general dish
+// classification.
+const HERO_CATEGORY_PATTERNS = [
+  ["sardines", /\bsardines?\b/i],
+  ["anchovy", /\banchov(?:y|ies)\b/i],
+  ["mackerel", /\bmackerel\b/i],
+  ["tuna", /\btuna\b/i],
+  ["salmon", /\bsalmon\b/i],
+  ["shellfish", ALLERGEN_DERIVATIVES.shellfish],
+  ["bacon", /\bbacon\b/i],
+  ["sausage", /\bsausages?\b/i],
+  ["ham", /\bhams?\b/i],
+  ["chicken", /\bchicken\b/i],
+  ["turkey", /\bturkey\b/i],
+  ["beef_steak", /\b(beef|steaks?)\b/i],
+  ["pork", /\bpork\b/i],
+  ["lamb", /\blamb\b/i],
+  ["tofu_tempeh", /\b(tofu|tempeh)\b/i],
+  ["eggs", /\b(eggs?|omelett?e|frittata|shakshuka)\b/i],
+  ["yogurt", /\byogh?urt\b/i],
+  ["oats", /\b(oats?|oatmeal|overnight oats|porridge|granola)\b/i],
+  ["cheese", /\bcheeses?\b/i],
+  ["beans_lentils", /\b(beans?|lentils?|chickpeas?)\b/i],
+  ["fish_generic", /\bfish\b/i],
+];
+
+function getMealHeroCategory(meal) {
+  const name = meal.name || "";
+  for (const [category, pattern] of HERO_CATEGORY_PATTERNS) {
+    if (pattern.test(name)) return category;
+  }
+  const ingredientText = (meal.ingredients || []).map(i => (typeof i === "string" ? i : i?.name)).filter(Boolean).join(" ");
+  for (const [category, pattern] of HERO_CATEGORY_PATTERNS) {
+    if (pattern.test(ingredientText)) return category;
+  }
+  return null;
+}
+
+function extractWithClause(title) {
+  const m = (title || "").match(/\bwith\s+(.+)$/i);
+  return m ? m[1].trim().toLowerCase() : null;
+}
+
+// Catches "... with Sardines & Olive Oil Drizzle" repeating verbatim (or a
+// fully identical title) across days, even on the rare occasion the hero
+// category heuristic above doesn't line up the same way.
+function titlesShareSignificantPattern(titleA, titleB) {
+  if (!titleA || !titleB) return false;
+  if (titleA.trim().toLowerCase() === titleB.trim().toLowerCase()) return true;
+  const wa = extractWithClause(titleA);
+  const wb = extractWithClause(titleB);
+  return !!(wa && wb && wa === wb);
+}
+
+// Runs across the WHOLE assembled plan (all days), not per-day — days are
+// generated independently/in parallel for latency, so this is the only
+// place a same-slot repeat across consecutive days can be caught at all.
+// Only Breakfast/Lunch/Dinner are compared (exactly one per day, so "same
+// slot on consecutive days" is unambiguous); Snacks are excluded since a
+// day can have 1-4 of them with no fixed ordering to compare against.
+function findCrossDayVarietyViolations(days) {
+  const violations = [];
+  const slots = ["Breakfast", "Lunch", "Dinner"];
+  const bySlot = Object.fromEntries(slots.map(s => [s, []]));
+  for (const day of days || []) {
+    if (!day || day.failed || !Array.isArray(day.meals)) continue;
+    for (const slot of slots) {
+      const mealIndex = day.meals.findIndex(m => m.type === slot);
+      if (mealIndex === -1) continue;
+      bySlot[slot].push({ dayNum: day.day, mealIndex, meal: day.meals[mealIndex] });
+    }
+  }
+  for (const slot of slots) {
+    const entries = bySlot[slot];
+    for (let i = 1; i < entries.length; i++) {
+      const prev = entries[i - 1];
+      const cur = entries[i];
+      const prevHero = getMealHeroCategory(prev.meal);
+      const curHero = getMealHeroCategory(cur.meal);
+      if (prevHero && curHero && prevHero === curHero) {
+        violations.push({
+          code: "CROSS_DAY_VARIETY", day: cur.dayNum, mealIndex: cur.mealIndex, mealType: slot, mealName: cur.meal.name,
+          detail: `hero ingredient "${curHero}" repeats in ${slot} from Day ${prev.dayNum} ("${prev.meal.name}") to Day ${cur.dayNum}`,
+        });
+      } else if (titlesShareSignificantPattern(prev.meal.name, cur.meal.name)) {
+        violations.push({
+          code: "CROSS_DAY_VARIETY", day: cur.dayNum, mealIndex: cur.mealIndex, mealType: slot, mealName: cur.meal.name,
+          detail: `title pattern repeats in ${slot} from Day ${prev.dayNum} ("${prev.meal.name}") to Day ${cur.dayNum} ("${cur.meal.name}")`,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
+// ─── PORTION SCALE ──────────────────────────────────────────────────────────
+// A "snack" that's calorie/component-heavy enough to be a full meal, or a
+// Lunch/Dinner light enough to be a snack, defeats the slot just as much as
+// serving the wrong FORMAT of food does.
+const SNACK_MAX_CALORIE_SHARE = 0.20;
+const MAIN_MIN_CALORIE_SHARE = 0.15;
+const SNACK_MAX_INGREDIENTS = 6;
+const MAIN_MIN_INGREDIENTS = 2;
+
+function findMealPortionScaleViolation(meal, dailyTarget) {
+  const ingredientCount = (meal.ingredients || []).length;
+  if (meal.type === "Snack") {
+    if (dailyTarget && meal.calories > dailyTarget * SNACK_MAX_CALORIE_SHARE) {
+      return { code: "PORTION_SCALE", detail: `${meal.calories} kcal is ${Math.round((meal.calories / dailyTarget) * 100)}% of the daily target — too large to be a Snack (full-meal scale)` };
+    }
+    if (ingredientCount > SNACK_MAX_INGREDIENTS) {
+      return { code: "PORTION_SCALE", detail: `${ingredientCount} ingredients is too many components for a Snack` };
+    }
+  }
+  if (meal.type === "Lunch" || meal.type === "Dinner") {
+    if (dailyTarget && meal.calories < dailyTarget * MAIN_MIN_CALORIE_SHARE) {
+      return { code: "PORTION_SCALE", detail: `${meal.calories} kcal is only ${Math.round((meal.calories / dailyTarget) * 100)}% of the daily target — too small to be a complete ${meal.type}` };
+    }
+    if (ingredientCount < MAIN_MIN_INGREDIENTS) {
+      return { code: "PORTION_SCALE", detail: `only ${ingredientCount} ingredient(s) — too sparse to be a complete ${meal.type}` };
+    }
+  }
+  return null;
+}
+
+// ─── TITLES ─────────────────────────────────────────────────────────────────
+// Titles were reading as diet-compliance statements ("Mediterranean Greek
+// Yogurt Parfait with Sardines...") instead of what a menu would say. The
+// diet is already shown as a tag chip elsewhere — the title's only job is to
+// say what the dish IS.
+const MAX_TITLE_CONTENT_WORDS = 6;
+// Connector words don't count toward the length cap — "Greek Yogurt Parfait
+// with Berries & Granola" is 5 content words (Greek/Yogurt/Parfait/Berries/
+// Granola), not 7.
+const TITLE_STOPWORDS = new Set(["with", "and", "&", "in", "of", "the", "a", "an", "on", "over", "topped"]);
+const DIET_NAME_IN_TITLE_PATTERN = /\b(mediterranean|vegan|vegetarian|keto|paleo|halal|kosher|carnivore|fodmap|gluten[- ]free|dairy[- ]free|lactose[- ]free|nut[- ]free|egg[- ]free|shellfish[- ]free|soy[- ]free|sesame[- ]free|low[- ]carb|calorie deficit)\b/i;
+
+function findMealTitleViolation(meal) {
+  const name = (meal.name || "").trim();
+  if (!name) return { code: "TITLE", detail: "meal has no name" };
+  const contentWordCount = name.split(/\s+/).filter(w => w && !TITLE_STOPWORDS.has(w.toLowerCase())).length;
+  if (contentWordCount > MAX_TITLE_CONTENT_WORDS) {
+    return { code: "TITLE", detail: `"${name}" is ${contentWordCount} content words, over the ${MAX_TITLE_CONTENT_WORDS}-word limit` };
+  }
+  const dietMatch = name.match(DIET_NAME_IN_TITLE_PATTERN);
+  if (dietMatch) {
+    return { code: "TITLE", detail: `"${name}" names the diet ("${dietMatch[0]}") — the diet is already shown as a tag, the title should just say what the dish is` };
+  }
+  return null;
+}
+
+// ─── ICON SANITY ────────────────────────────────────────────────────────────
+// Production example: a Day 2 Breakfast displayed a fish emoji (accurately —
+// the meal's hero WAS a tin of sardines, itself the underlying bug). Once
+// the hero-ingredient check above blocks that content, a mismatched icon
+// mostly can't happen for the same meal — this catches the residual case of
+// a raw-fish/sushi/shellfish-style icon on a Breakfast or Snack even when
+// the ingredients text alone didn't trip the slot-content check.
+const SEAFOOD_ICON_PATTERN = /[🐟🐠🦐🦀🦞🐙🦑🍣🍤]/u;
+function findMealIconViolation(meal) {
+  if (meal.type !== "Breakfast" && meal.type !== "Snack") return null;
+  const emoji = meal.emoji || "";
+  if (!SEAFOOD_ICON_PATTERN.test(emoji)) return null;
+  const text = [meal.name, meal.description].filter(Boolean).join(" ");
+  if (/smoked salmon|lox/i.test(text)) return null; // smoked salmon bagel is a normal breakfast
+  return { code: "ICON", detail: `emoji "${emoji}" is a seafood/sushi icon, not appropriate for ${meal.type}` };
 }
 
 // ─── F. KITCHEN ACCESS ────────────────────────────────────────────────────
@@ -943,6 +1148,12 @@ function validateDay(meals, { requiredAllergenTags, customAllergyTerm, activeDie
     }
     const slotV = findMealSlotContentViolation(meal);
     if (slotV) violations.push({ ...slotV, mealIndex, mealType: meal.type, mealName: meal.name });
+    const portionV = findMealPortionScaleViolation(meal, calorieTarget);
+    if (portionV) violations.push({ ...portionV, mealIndex, mealType: meal.type, mealName: meal.name });
+    const titleV = findMealTitleViolation(meal);
+    if (titleV) violations.push({ ...titleV, mealIndex, mealType: meal.type, mealName: meal.name });
+    const iconV = findMealIconViolation(meal);
+    if (iconV) violations.push({ ...iconV, mealIndex, mealType: meal.type, mealName: meal.name });
     const kitchenV = findMealKitchenViolation(meal, kitchenList);
     if (kitchenV) violations.push({ ...kitchenV, mealIndex, mealType: meal.type, mealName: meal.name });
     const customsV = findMealCustomsViolation(meal, restrictedBorders, kitchenList);
@@ -1011,6 +1222,8 @@ function validatePlan(plan, userProfile, lang = "en") {
     for (const v of violations) allViolations.push({ ...v, day: dayNum });
   });
 
+  for (const v of findCrossDayVarietyViolations(days)) allViolations.push(v);
+
   return { valid: allViolations.length === 0, violations: allViolations };
 }
 
@@ -1022,7 +1235,11 @@ function describeMealViolation(v) {
         ? `Contains "${v.detail}" — the crew member has personally flagged this as something they cannot eat.`
         : `Contains/implies "${v.detail}" (detected via ${v.source}) which matches the user's required allergen avoidance "${v.tag}" — strictly forbidden, including this hidden/derivative form.`;
     case "DIET": return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
-    case "MEAL_SLOT_CONTENT": return v.detail;
+    case "MEAL_SLOT_CONTENT": return `${v.detail} — a normal person wouldn't recognize this as ${v.mealType} and eat it at that time of day. Replace it with a genuinely typical ${v.mealType} dish. If a protein/macro target is hard to hit with ${v.mealType}-appropriate foods, that's fine — the DAILY total across all meals is what matters, not this one meal in isolation.`;
+    case "PORTION_SCALE": return `${v.detail}. Rebuild this ${v.mealType} at the right scale for its slot.`;
+    case "TITLE": return `Title problem: ${v.detail}. Rename it to a short, plain menu-style name (max ${MAX_TITLE_CONTENT_WORDS} content words) that says what the dish IS — never the diet name (that's already shown separately as a tag).`;
+    case "ICON": return `${v.detail}. Pick an emoji that matches the meal's actual ingredients and slot.`;
+    case "CROSS_DAY_VARIETY": return `${v.detail}. Replace this meal with a genuinely different dish — different hero ingredient AND different title pattern from the other day.`;
     case "KITCHEN": return v.detail;
     case "CUSTOMS": return v.detail;
     default: return v.detail;
@@ -1482,8 +1699,13 @@ Generate ALL ${pairingDays} day(s) of this nutrition plan in a single response. 
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 Each day: include Breakfast, Lunch, Dinner, and 1-2 Snacks.
 Each meal's food must suit its time of day, even under dietary or kitchen constraints — do not default to a lunch/dinner-style savory main (e.g. a shawarma wrap, kebab, or rice bowl) just because it's convenient for the diet or "order from hotel room service." Breakfast should be typical breakfast fare (eggs, oats, yogurt, toast, smoothies, etc., adapted to the diet); Lunch and Dinner should be fuller mains appropriate to those times.
-The reverse mistake is equally wrong: do NOT put a breakfast/brunch-style dish (a bagel with cream cheese and lox, a pastry plate, a smoothie bowl, cereal) under Dinner just because it's convenient or diet-compliant — smoked salmon and cream cheese belong at Breakfast, not Dinner.
+BREAKFAST HARD RULE — this is checked in code, not just requested: canned/oily fish (sardines, anchovies, mackerel, tuna), shellfish, steaks/roasts/dense red meat, stews, curries, pasta, rice-and-meat plates, and soups (except congee) are NEVER breakfast, no matter how well they satisfy the diet or a protein/omega-3 target. Smoked salmon on a bagel IS a normal breakfast; a tin of sardines on yogurt or oats is not. This applies IDENTICALLY across every diet: Mediterranean breakfast = Greek yogurt with honey/nuts, eggs, olives + feta + bread, or fruit — NOT tinned fish. Keto breakfast = eggs, bacon, avocado, cheese — NOT a steak dinner. Vegan breakfast = tofu scramble, oats, smoothies, nut butter toast — NOT a lentil curry. The test for every meal, every slot: would a normal person recognize this as that meal and want to eat it at that time of day?
+CRITICAL — DAILY TOTALS, NOT PER-MEAL OPTIMIZATION: if a protein/omega-3/calorie target is hard to hit using slot-appropriate breakfast foods, meet the REST of it at lunch, dinner, or snacks — the daily total across all meals is what's checked, never force an inappropriate food into a slot just to hit a number for that one meal.
+The reverse mistake is equally wrong: do NOT put a breakfast/brunch-style dish (a bagel with cream cheese and lox, a pastry plate, a smoothie bowl, cereal, overnight oats) under Dinner or Lunch just because it's convenient or diet-compliant — smoked salmon and cream cheese belong at Breakfast, not Dinner. Dessert (cake, pie, ice cream, cookies) standing in as the entire Lunch or Dinner is equally wrong.
 Dinner (and Lunch) must be a substantial, complete main course — protein + a starch/grain/vegetable side, portioned as a full meal — never a single light salad, a cheese/charcuterie plate, or an appetizer-sized dish (e.g. beef carpaccio, prosciutto-wrapped mozzarella, a small tapas plate) standing in as the entire meal.
+A Snack must be snack-scale — a small fraction of the daily calorie target, few components (fruit, nuts, yogurt, a small sandwich, veg + dip) — never a full plated dinner-format main (roast, stew, curry, casserole, risotto).
+TITLES: name the actual dish, not a compliance statement — "Greek Yogurt Parfait with Berries & Granola", not "Mediterranean Greek Yogurt Parfait with Sardines & Olive Oil Drizzle." Max ~6 words. NEVER put the diet name (Mediterranean, Vegan, Keto, Halal, Gluten-Free, etc.) in the title — the diet is already shown separately as a tag.
+Do not repeat the same hero ingredient (e.g. sardines, salmon, chicken) or the same title pattern in the same meal slot on consecutive days — vary proteins and formats across the pairing.
 These meal-timing and portion rules apply IDENTICALLY to every day of a multi-day pairing — Day 1 and the LAST day are held to the exact same standard. When reaching for a new/different dish to satisfy the variety requirement below, never let that novelty pull Breakfast into lunch/dinner territory or shrink Dinner down to an appetizer — pick a different full-sized, time-appropriate dish instead.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
 Every meal must include a "tip" and an "emoji" field with 2–3 food emoji accurately representing the meal. Every meal must also include an "ingredients" array listing each distinct ingredient by short name (e.g. "eggs", "spinach", "feta cheese") — specific enough for a crew member to spot a personal allergen, not full recipe steps.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}${ctx.airplaneMealDesc ? `\nThe crew member has told us their airplane meal will include: "${ctx.airplaneMealDesc}". For any meal of type "airplane_food", describe how to complement or adapt this specific meal (e.g. add protein, skip the dessert, supplement with a snack). Plan the rest of the day's meals to balance the nutrients already provided by this airplane meal.` : ""}
@@ -2176,7 +2398,7 @@ app.post("/api/referral/use", async (req, res) => {
 // adding "ingredients" — every previously-cached meal was missing it).
 // Folded into every cache key so old entries become unreachable and get
 // freshly regenerated under the current schema/prompt.
-const CACHE_SCHEMA_VERSION = "v8";
+const CACHE_SCHEMA_VERSION = "v9";
 
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
@@ -2587,6 +2809,49 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       });
       const failedCount = dayResults.filter(d => d === null).length;
       console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${failedCount} failed extras=${cachedExtras ? "cache" : "ai"}`);
+    }
+
+    // Cross-day variety runs across the WHOLE assembled plan — days generate
+    // independently (parallel, for latency), so a same-slot hero/title repeat
+    // across consecutive days can only be caught here, after assembly. Repair
+    // is targeted (just the specific colliding meal, on the LATER day) rather
+    // than a full day-level regeneration, to keep this bounded and fast.
+    const crossDayViolations = findCrossDayVarietyViolations(days);
+    if (crossDayViolations.length > 0) {
+      const { tags: requiredAllergenTags, customAllergyTerm } = getUserRequiredAllergenAvoidance(data);
+      const rawDietsForRepair = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
+      const activeDietTagsForRepair = rawDietsForRepair.filter(d => DIET_PROHIBITED[d] || d === "kosher" || d === "low_carb");
+      await Promise.all(crossDayViolations.map(async (v) => {
+        console.warn(`[validator] day=${v.day} CROSS_DAY_VARIETY meal="${v.mealName}" detail="${v.detail}"`);
+        const targetDay = days.find(d => d.day === v.day);
+        if (!targetDay || targetDay.failed || !Array.isArray(targetDay.meals)) return;
+        const meal = targetDay.meals[v.mealIndex];
+        if (!meal) return;
+        const rawKitchen = Array.isArray(data.kitchen_by_day)
+          ? (data.kitchen_by_day[v.day - 1] || data.kitchen || [])
+          : (data.kitchen || []);
+        const dayKitchen = Array.isArray(rawKitchen) ? rawKitchen : (rawKitchen ? [rawKitchen] : []);
+        const replacement = await regenerateMealForViolations(meal, [v], ctx.dietRules, buildKitchenAccessBlock(dayKitchen));
+        if (!replacement) {
+          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" failed to regenerate — marking day failed`);
+          targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
+          return;
+        }
+        const stillBad = [
+          ...findMealAllergenViolations(replacement, requiredAllergenTags, customAllergyTerm),
+          ...findMealDietViolations(replacement, activeDietTagsForRepair),
+          findMealSlotContentViolation(replacement),
+          findMealKitchenViolation(replacement, dayKitchen),
+          findMealCustomsViolation(replacement, ctx.restrictedBorders, dayKitchen),
+        ].filter(Boolean);
+        if (stillBad.length > 0) {
+          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues, marking day failed: ${JSON.stringify(stillBad)}`);
+          targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
+          return;
+        }
+        targetDay.meals[v.mealIndex] = { ...replacement, type: meal.type };
+        targetDay.totalCalories = targetDay.meals.reduce((s, m) => s + (m.calories || 0), 0);
+      }));
     }
 
     const extras = await extrasPromise;
@@ -3898,5 +4163,7 @@ export {
   findMealSlotContentViolation, findMealKitchenViolation, findMealCustomsViolation,
   getUserRequiredAllergenAvoidance, getExpectedMealStructure, ALLERGEN_DERIVATIVES,
   USER_ALLERGY_TO_TAGS, DIET_PROHIBITED, KITCHEN_PREP_METHOD_ALLOW, MEAL_SCHEMA,
+  findMealPortionScaleViolation, findMealTitleViolation, findMealIconViolation,
+  getMealHeroCategory, findCrossDayVarietyViolations, titlesShareSignificantPattern,
 };
 export default app;

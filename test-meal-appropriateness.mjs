@@ -1,0 +1,178 @@
+// Unit tests for meal-appropriateness validation (slot content, portion
+// scale, cross-day variety, titles, icons). Pure logic only — no live
+// Anthropic calls. Mocks model output directly, including the exact
+// production bug report (sardines served as breakfast, two days running).
+//
+// Usage: node test-meal-appropriateness.mjs
+
+process.env.VERCEL = "1";
+
+const {
+  validatePlan, findMealSlotContentViolation, findMealPortionScaleViolation,
+  findMealTitleViolation, findMealIconViolation, getMealHeroCategory,
+  findCrossDayVarietyViolations, titlesShareSignificantPattern,
+  findMealAllergenViolations, ALLERGEN_DERIVATIVES,
+} = await import("./server.js");
+
+let passed = 0;
+let failed = 0;
+function check(label, cond, detail = "") {
+  if (cond) { passed++; console.log(`  ✓ ${label}`); }
+  else { failed++; console.error(`  ✗ ${label}${detail ? ` — ${detail}` : ""}`); }
+}
+
+function ing(...names) { return names.map(name => ({ name, quantity: 1, unit: "unit" })); }
+function meal(overrides = {}) {
+  return {
+    type: "Breakfast", name: "Meal", description: "A meal.", prep: "assemble",
+    calories: 500, protein: 20, carbs: 40, fat: 15, tags: [],
+    ingredients: ing("eggs", "toast"), estimated_cost: 5, allergens_present: [],
+    diet_tags: [], tip: "enjoy", emoji: "🍳", prep_method: "no_cook",
+    ...overrides,
+  };
+}
+
+// ── PRODUCTION BUG, REPRODUCED EXACTLY ──────────────────────────────────
+console.log("\n=== Exact production bug: sardines at breakfast, 2 days running ===");
+{
+  const day1Meal = meal({
+    name: "Mediterranean Greek Yogurt Parfait with Sardines & Olive Oil Drizzle",
+    description: "Greek yogurt topped with sardines and a drizzle of olive oil.",
+    ingredients: ing("greek yogurt", "sardines", "olive oil", "honey"),
+    emoji: "🐟🥣",
+  });
+  const v1 = findMealSlotContentViolation(day1Meal);
+  check("sardines-at-breakfast content REJECTED", !!v1, JSON.stringify(v1));
+
+  const day2Meal = meal({
+    name: "Mediterranean Overnight Oats with Sardines & Olive Oil Drizzle",
+    description: "Overnight oats topped with sardines and olive oil.",
+    ingredients: ing("oats", "sardines", "olive oil"),
+    emoji: "🐟🥣",
+  });
+  const v2 = findMealSlotContentViolation(day2Meal);
+  check("day-2 sardines-at-breakfast ALSO rejected independently", !!v2, JSON.stringify(v2));
+
+  const titleV1 = findMealTitleViolation(day1Meal);
+  check('title rejected for containing diet name "Mediterranean"', !!titleV1, JSON.stringify(titleV1));
+
+  const iconV1 = findMealIconViolation(day1Meal);
+  check("fish icon on Breakfast rejected (matches the reported icon bug)", !!iconV1, JSON.stringify(iconV1));
+
+  const cross = findCrossDayVarietyViolations([
+    { day: 1, meals: [day1Meal, meal({ type: "Lunch" }), meal({ type: "Dinner" })] },
+    { day: 2, meals: [day2Meal, meal({ type: "Lunch" }), meal({ type: "Dinner" })] },
+  ]);
+  check("cross-day repeat (sardines hero + shared title pattern) caught", cross.length > 0, JSON.stringify(cross));
+  console.log(`  Cross-day violations detected: ${JSON.stringify(cross, null, 2)}`);
+}
+
+// ── AC #5: forced violations, confirm rejection ──────────────────────────
+console.log("\n=== AC #5: force violations, confirm validator rejects each ===");
+{
+  const cerealAtDinner = meal({ type: "Dinner", name: "Cereal Bowl", description: "A bowl of cereal with milk.", ingredients: ing("cereal", "milk") });
+  check("cereal at DINNER rejected", !!findMealSlotContentViolation(cerealAtDinner), JSON.stringify(findMealSlotContentViolation(cerealAtDinner)));
+
+  const roastAsSnack = meal({ type: "Snack", name: "Pot Roast", description: "A hearty pot roast with vegetables.", ingredients: ing("beef", "carrots", "potatoes", "onion", "beef stock"), calories: 600 });
+  const slotV = findMealSlotContentViolation(roastAsSnack);
+  const portionV = findMealPortionScaleViolation(roastAsSnack, 2000);
+  check("roast as SNACK rejected (content)", !!slotV, JSON.stringify(slotV));
+  check("roast as SNACK also rejected (portion scale, 600/2000=30%)", !!portionV, JSON.stringify(portionV));
+
+  // Allergen present (peanut) for a nut-free user, via the full validatePlan path.
+  const data = {
+    email: "test@example.com", name: "V", gender: "female", weight: "70kg", dob: "1996-01-01",
+    position: "cabin", diets: ["nut_free"], goals: [], kitchen: ["full_kitchen"],
+    departure: "YOW", destinations: ["YOW"], going_usa: "no", timezone: "0",
+  };
+  const violatingPlan = {
+    days: [{
+      day: 1,
+      meals: [
+        meal({ type: "Breakfast", name: "Veggie Scramble", ingredients: ing("eggs", "spinach"), calories: 500 }),
+        meal({ type: "Lunch", name: "PB Sandwich", ingredients: ing("bread", "peanut butter"), calories: 600 }),
+        meal({ type: "Dinner", name: "Chicken & Rice", ingredients: ing("chicken", "rice"), calories: 700 }),
+        meal({ type: "Snack", name: "Fruit Cup", ingredients: ing("apple"), calories: 100 }),
+        meal({ type: "Snack", name: "Crackers", ingredients: ing("rice crackers"), calories: 100 }),
+      ],
+    }],
+  };
+  const result = validatePlan(violatingPlan, data, "en");
+  check("full plan with a peanut allergen present is REJECTED end-to-end", !result.valid);
+  check("violation log identifies the allergen specifically", result.violations.some(v => v.code === "ALLERGEN" && v.tag === "peanuts"), JSON.stringify(result.violations));
+  console.log(`  Full violation log for the forced-bad plan:`);
+  for (const v of result.violations) console.log(`    ${JSON.stringify(v)}`);
+}
+
+// ── Normal, appropriate meals pass ────────────────────────────────────────
+console.log("\n=== Normal meals pass every check ===");
+{
+  const normalBreakfast = meal({ type: "Breakfast", name: "Veggie Omelette", description: "Eggs with spinach and feta.", ingredients: ing("eggs", "spinach", "feta"), emoji: "🍳🧀" });
+  check("normal breakfast passes slot content", !findMealSlotContentViolation(normalBreakfast));
+  check("normal breakfast passes icon check", !findMealIconViolation(normalBreakfast));
+  check("normal breakfast title passes", !findMealTitleViolation(normalBreakfast));
+
+  const smokedSalmonBagel = meal({ type: "Breakfast", name: "Smoked Salmon Bagel", description: "A bagel with smoked salmon and cream cheese.", ingredients: ing("bagel", "smoked salmon", "cream cheese"), emoji: "🐟🥯" });
+  check("smoked salmon bagel is a NORMAL breakfast (not rejected)", !findMealSlotContentViolation(smokedSalmonBagel));
+  check("smoked salmon bagel's fish icon is exempted (explicit exception)", !findMealIconViolation(smokedSalmonBagel));
+
+  const normalSnack = meal({ type: "Snack", name: "Apple & Almond Butter", ingredients: ing("apple", "almond butter"), calories: 150 });
+  check("normal snack passes portion scale", !findMealPortionScaleViolation(normalSnack, 2000));
+
+  const longTitle = meal({ name: "Grilled Herb-Crusted Chicken Breast with Roasted Seasonal Vegetables and Quinoa" });
+  check("overly long title rejected", !!findMealTitleViolation(longTitle));
+
+  const goodLengthTitle = meal({ name: "Greek Yogurt Parfait with Berries & Granola" });
+  check('user\'s own example title ("Greek Yogurt Parfait with Berries & Granola") passes length check', !findMealTitleViolation(goodLengthTitle));
+}
+
+// ── Hero classification + title-pattern matching ──────────────────────────
+console.log("\n=== Hero classification & title-pattern matching ===");
+{
+  check('getMealHeroCategory identifies "sardines"', getMealHeroCategory(meal({ name: "Sardine Toast" })) === "sardines");
+  check('getMealHeroCategory identifies "chicken"', getMealHeroCategory(meal({ name: "Grilled Chicken Salad" })) === "chicken");
+  check("getMealHeroCategory returns null for a plain fruit snack", getMealHeroCategory(meal({ name: "Apple Slices", ingredients: ing("apple") })) === null);
+  check("identical trailing 'with' clauses flagged as a repeating pattern",
+    titlesShareSignificantPattern("Mediterranean Parfait with Sardines & Olive Oil Drizzle", "Overnight Oats with Sardines & Olive Oil Drizzle"));
+  check("genuinely different titles are NOT flagged",
+    !titlesShareSignificantPattern("Veggie Omelette with Spinach", "Overnight Oats with Berries"));
+}
+
+// ── No false positives on 3 days of genuinely varied breakfasts ──────────
+console.log("\n=== No cross-day false positive on genuinely varied breakfasts ===");
+{
+  const days = [
+    { day: 1, meals: [
+      meal({ type: "Breakfast", name: "Veggie Omelette", ingredients: ing("eggs", "spinach") }),
+      meal({ type: "Lunch", name: "Chicken Caesar Salad", ingredients: ing("chicken", "lettuce", "parmesan") }),
+      meal({ type: "Dinner", name: "Grilled Salmon & Rice", ingredients: ing("salmon", "rice", "broccoli") }),
+    ] },
+    { day: 2, meals: [
+      meal({ type: "Breakfast", name: "Greek Yogurt Parfait", ingredients: ing("greek yogurt", "berries", "granola") }),
+      meal({ type: "Lunch", name: "Turkey Club Wrap", ingredients: ing("turkey", "tortilla", "avocado") }),
+      meal({ type: "Dinner", name: "Beef Stir-Fry", ingredients: ing("beef", "rice", "vegetables") }),
+    ] },
+    { day: 3, meals: [
+      meal({ type: "Breakfast", name: "Overnight Oats", ingredients: ing("oats", "almond milk", "chia seeds") }),
+      meal({ type: "Lunch", name: "Lentil Soup & Bread", ingredients: ing("lentils", "bread", "carrots") }),
+      meal({ type: "Dinner", name: "Roast Chicken & Potatoes", ingredients: ing("chicken", "potatoes", "green beans") }),
+    ] },
+  ];
+  const cross = findCrossDayVarietyViolations(days);
+  check("3 genuinely varied breakfasts produce zero cross-day violations", cross.length === 0, JSON.stringify(cross));
+}
+
+// ── Regression: "yog?hurt" only matched "yohurt"/"yoghurt", never the ────
+// ── common American spelling "yogurt" — found while chasing what looked ──
+// ── like a cross-day false positive; actually a real allergen-safety gap. ─
+console.log("\n=== Regression: American-spelling \"yogurt\" matches the milk allergen ===");
+{
+  check('ALLERGEN_DERIVATIVES.milk matches "yogurt" (US spelling)', ALLERGEN_DERIVATIVES.milk.test("yogurt"));
+  check('ALLERGEN_DERIVATIVES.milk matches "yoghurt" (UK spelling)', ALLERGEN_DERIVATIVES.milk.test("yoghurt"));
+  const dairyAllergyMeal = meal({ type: "Snack", name: "Yogurt Cup", ingredients: ing("yogurt", "honey") });
+  const v = findMealAllergenViolations(dairyAllergyMeal, new Set(["milk"]), "");
+  check('a meal with "yogurt" (no "h") is caught for a dairy-allergic user', v.some(x => x.tag === "milk"), JSON.stringify(v));
+}
+
+console.log(`\n${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);
