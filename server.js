@@ -622,7 +622,12 @@ const ALLERGEN_DERIVATIVES = {
   // tree_nuts/peanuts patterns instead, not dairy; a bare \bbutter\b match
   // was flagging "peanut butter" as a MILK violation, a false positive for
   // any allergen combo that doesn't actually include dairy.
-  milk: /\b(milk|buttermilk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|cocoa|cacao|shea|sunflower|apple|nut|seed)\s)butter|cheeses?|yog?hurt|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half)\b/i,
+  // Named cheese varieties (parmesan, cheddar, ...) don't contain the literal
+  // word "cheese" and were previously missed by the bare `cheeses?` term —
+  // verification found "Chicken Caesar Wrap ... parmesan" passing a
+  // dairy-allergy check clean. Added explicitly rather than relying on the
+  // generic word.
+  milk: /\b(milk|buttermilk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|cocoa|cacao|shea|sunflower|apple|nut|seed)\s)butter|cheeses?|parmesan|cheddar|mozzarella|brie|feta|gouda|provolone|camembert|gruy[eè]re|halloumi|manchego|goat cheese|cream cheese|cottage cheese|blue cheese|yog?hurt|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half)\b/i,
   eggs: /\b(eggs?|egg whites?|egg yolks?|albumin|albumen|ovalbumin|mayonnaise|mayo|hollandaise|b[ée]arnaise|meringue|frittata|quiche|french toast|egg wash|aioli)\b/i,
   fish: /\b(fish|anchov(?:y|ies)|fish sauce|worcestershire(?: sauce)?|bonito|dashi|salmon|tuna|cod|tilapia|sardines?|surimi|imitation crab)\b/i,
   shellfish: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|crawfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|shrimp paste)\b/i,
@@ -695,17 +700,32 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
     }
     const pattern = ALLERGEN_DERIVATIVES[tag];
     if (!pattern) continue;
-    const ingHit = ingredientNames.find(n => pattern.test(n));
+    const qualifier = ALLERGEN_SELF_LABEL_QUALIFIER[tag];
+    // Verification found "gluten-free flour" / "gluten-free rice crackers" as
+    // discrete ingredient NAMES still tripping the wheat_gluten ban — the
+    // qualifier exemption below only ever ran against the free-text scan, not
+    // against the ingredient string itself, even though the qualifying phrase
+    // was right there in the same ingredient name.
+    const patternMatches = ingredientNames.filter(n => pattern.test(n));
+    const ingHit = patternMatches.find(n => !(qualifier && qualifier.test(n)));
     if (ingHit) {
       violations.push({ code: "ALLERGEN", tag, source: "ingredient", detail: ingHit });
       continue;
     }
-    const text = [meal.name, meal.description, meal.tip].filter(Boolean).join(" ");
-    const match = text.match(pattern);
-    if (match) {
-      const qualifier = ALLERGEN_SELF_LABEL_QUALIFIER[tag];
-      if (qualifier && qualifier.test(text)) continue;
-      violations.push({ code: "ALLERGEN", tag, source: "text", detail: match[0] });
+    // Only run the free-text scan as an INDEPENDENT check when the ingredient
+    // list said nothing about this pattern at all. If it did (and every match
+    // was self-qualified, e.g. "gluten-free rice crackers"), a bare restatement
+    // in the dish's own name/description (e.g. a meal literally named "Rice
+    // Crackers") is just that same already-cleared ingredient, not a newly
+    // discovered hidden allergen — verification found "Rice Crackers" tripping
+    // this exact false positive via its own name.
+    if (patternMatches.length === 0) {
+      const text = [meal.name, meal.description, meal.tip].filter(Boolean).join(" ");
+      const match = text.match(pattern);
+      if (match) {
+        if (qualifier && qualifier.test(text)) continue;
+        violations.push({ code: "ALLERGEN", tag, source: "text", detail: match[0] });
+      }
     }
   }
 
@@ -865,10 +885,22 @@ const CARRIED_BAN_CATEGORY_PATTERNS = [
 ];
 const LOCALLY_PURCHASED_TIP_PATTERN = /buy locally|consume before|do not pack|eat before the next flight/i;
 
-function findMealCustomsViolation(meal, restrictedBorders) {
+function findMealCustomsViolation(meal, restrictedBorders, kitchenList) {
   if (!restrictedBorders || restrictedBorders.length === 0) return null;
   if (meal.prep_method === "airplane_provided") return null; // airline-catered, not personally carried
   if (LOCALLY_PURCHASED_TIP_PATTERN.test(meal.tip || "")) return null;
+  // A meal cooked with full home-kitchen access is presumed eaten fresh at
+  // home, not packed into the travel bag — except Snacks, which are the one
+  // meal type genuinely likely to be packed along regardless of kitchen
+  // access (that's what "pack a snack for the flight" means). Verification
+  // found this flagging an entirely ordinary home-cooked "banana in oatmeal"
+  // Breakfast for any pairing that merely touched a restricted border at
+  // all (which is nearly every pairing with a Canadian home base, since the
+  // crew member's own return home already counts) — the check needs to
+  // distinguish "cooked and eaten at home" from "packed for the trip."
+  const isHomeCookedNonSnack = meal.type !== "Snack"
+    && Array.isArray(kitchenList) && kitchenList.length === 1 && kitchenList[0] === "full_kitchen";
+  if (isHomeCookedNonSnack) return null;
   const ingredientNames = (meal.ingredients || []).map(i => (typeof i === "string" ? i : i?.name)).filter(Boolean);
   for (const pattern of CARRIED_BAN_CATEGORY_PATTERNS) {
     const hit = ingredientNames.find(n => pattern.test(n));
@@ -899,7 +931,7 @@ function validateDay(meals, { requiredAllergenTags, customAllergyTerm, activeDie
     if (slotV) violations.push({ ...slotV, mealIndex, mealType: meal.type, mealName: meal.name });
     const kitchenV = findMealKitchenViolation(meal, kitchenList);
     if (kitchenV) violations.push({ ...kitchenV, mealIndex, mealType: meal.type, mealName: meal.name });
-    const customsV = findMealCustomsViolation(meal, restrictedBorders);
+    const customsV = findMealCustomsViolation(meal, restrictedBorders, kitchenList);
     if (customsV) violations.push({ ...customsV, mealIndex, mealType: meal.type, mealName: meal.name });
   });
 
