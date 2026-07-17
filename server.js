@@ -638,7 +638,11 @@ function escapeRegExp(s) {
 // sources — the part a prompt-only approach structurally cannot guarantee,
 // because it has to catch every alias, not just the ones the model thinks of.
 const ALLERGEN_DERIVATIVES = {
-  peanuts: /\b(peanuts?|peanut butter|groundnuts?|arachis)\b/i,
+  // "satay" is included because it's an opaque name for a peanut-based sauce
+  // (Indonesian/Malaysian) — an ingredient literally named "satay sauce" or
+  // a dish named "Chicken Satay" contains no other peanut-derivative keyword
+  // for this pattern to catch, even though the dish itself is peanut-based.
+  peanuts: /\b(peanuts?|peanut butter|groundnuts?|arachis|satay)\b/i,
   tree_nuts: /\b(almonds?|almond butter|walnuts?|cashews?|cashew butter|pecans?|pistachios?|hazelnuts?|filberts?|macadamias?|brazil nuts?|pine nuts?|pignoli|chestnuts?|nutella|marzipan|praline|nut butter|gianduja|frangipane|pesto)\b/i,
   // "butter" excludes nut/seed/fruit "___ butter" compounds (peanut butter,
   // almond butter, apple butter, ...) — those are correctly caught by the
@@ -2773,7 +2777,8 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         days: guardedBankDays,
         groceryList: entry.groceryList,
         foodRestrictions: entry.foodRestrictions,
-        performanceAdvisory: getCognitivePerfRules(data, ctx.leg),
+        // Premium-only, same reasoning as generateOneDay's dayCtx.cognitivePerfRules below.
+        performanceAdvisory: usage.isPremium ? getCognitivePerfRules(data, ctx.leg) : null,
         hydration: computeHydration(data),
         pairingCount: usage.pairingCount,
         isPremium: usage.isPremium,
@@ -2880,7 +2885,15 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         // generated here, so a multi-day pairing gets correct, independently
         // computed circadian guidance for every day, not just day 1.
         const dayLeg = computeLegForDay(dayData, overallDayNum);
-        dayCtx.cognitivePerfRules = getCognitivePerfRules(dayData, dayLeg);
+        // "Cognitive Performance meal timing" (duty-schedule + jetlag-direction
+        // optimized food choices) is an advertised premium feature (see the
+        // gold-highlighted bullet on the paywall) — gate it on the real
+        // subscription (usage.isPremium, closed over from reservePairingUsage
+        // above), not on whether this pairing happens to be the free one.
+        // legDirection/legHours stay ungated below: those only drive the
+        // plain-language jetlagNote ("you'll lose/gain N hours"), a separate,
+        // always-free basic feature, not this premium protocol.
+        dayCtx.cognitivePerfRules = usage.isPremium ? getCognitivePerfRules(dayData, dayLeg) : null;
         dayCtx.legDirection = dayLeg?.direction || null;
         dayCtx.legHours = dayLeg?.hours || 0;
 
@@ -3076,7 +3089,8 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       days,
       groceryList: extras.groceryList,
       foodRestrictions: extras.foodRestrictions,
-      performanceAdvisory: getCognitivePerfRules(data, ctx.leg),
+      // Premium-only, same reasoning as generateOneDay's dayCtx.cognitivePerfRules above.
+      performanceAdvisory: usage.isPremium ? getCognitivePerfRules(data, ctx.leg) : null,
       hydration: computeHydration(data),
       pairingCount: usage.pairingCount,
       isPremium: usage.isPremium,
