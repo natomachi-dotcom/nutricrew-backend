@@ -1510,14 +1510,167 @@ ${blocks}
 COMBINED COMPLIANCE: Where rules conflict, apply the MOST RESTRICTIVE. If one diet allows dairy but another forbids it, exclude dairy entirely. Every single meal must satisfy every selected diet.` + FOOTER;
 }
 
-function getCognitivePerfRules(data) {
+// ─── FLIGHT DIRECTION (derived, never asked) ───────────────────────────────
+// The app used to ask crew to pick "eastbound"/"westbound" by hand (Duty
+// Schedule step) — unreliable and pointless, since departure/destination
+// airport codes are already on hand and the direction is fully determined by
+// their real UTC offsets. Production example of the old approach failing:
+// YVR->FLL was hand-labeled "Westbound" when it's eastbound (PST -8 -> EST
+// -5 is +3, i.e. losing hours). Computed per LEG (this day's departure ->
+// this day's destination), not once for the whole pairing — a multi-day
+// pairing can cross several genuinely different legs.
+//
+// IANA zone per major airport code, used with Intl's DST-aware offset
+// lookup below rather than a hardcoded static UTC offset (which would be
+// wrong half the year for any zone that observes DST). Not exhaustive —
+// covers the same North America/Europe/Middle East/Asia-Pacific breadth as
+// the roster-parsing IATA reference elsewhere in this file; airports not
+// listed here simply produce no computed direction (jetlag guidance is
+// skipped for that leg rather than guessed).
+const AIRPORT_TIMEZONE = {
+  // Canada
+  YYZ: "America/Toronto", YUL: "America/Toronto", YOW: "America/Toronto", YQB: "America/Toronto",
+  YTZ: "America/Toronto", YHM: "America/Toronto", YKF: "America/Toronto", YXU: "America/Toronto",
+  YQG: "America/Toronto", YSB: "America/Toronto", YTS: "America/Toronto", YAM: "America/Toronto",
+  YTR: "America/Toronto", YYB: "America/Toronto",
+  YVR: "America/Vancouver", YYJ: "America/Vancouver", YXX: "America/Vancouver",
+  YYC: "America/Edmonton", YEG: "America/Edmonton",
+  YWG: "America/Winnipeg", YQT: "America/Winnipeg", YQM: "America/Moncton",
+  YXE: "America/Regina", YQR: "America/Regina",
+  YHZ: "America/Halifax", YFC: "America/Moncton",
+  YYT: "America/St_Johns", YZF: "America/Yellowknife",
+  // USA — Eastern
+  JFK: "America/New_York", EWR: "America/New_York", LGA: "America/New_York", BOS: "America/New_York",
+  PHL: "America/New_York", IAD: "America/New_York", DCA: "America/New_York", BWI: "America/New_York",
+  BDL: "America/New_York", PVD: "America/New_York", ALB: "America/New_York", SYR: "America/New_York",
+  BUF: "America/New_York", ROC: "America/New_York", PIT: "America/New_York",
+  MIA: "America/New_York", FLL: "America/New_York", MCO: "America/New_York", TPA: "America/New_York",
+  RSW: "America/New_York", PBI: "America/New_York", SRQ: "America/New_York", JAX: "America/New_York",
+  SAV: "America/New_York", CLT: "America/New_York", RDU: "America/New_York", ORF: "America/New_York",
+  RIC: "America/New_York", DTW: "America/New_York", CLE: "America/New_York", CMH: "America/New_York",
+  CVG: "America/New_York", IND: "America/New_York", ATL: "America/New_York",
+  // USA — Central
+  ORD: "America/Chicago", MDW: "America/Chicago", MSP: "America/Chicago", STL: "America/Chicago",
+  MKE: "America/Chicago", DFW: "America/Chicago", IAH: "America/Chicago", HOU: "America/Chicago",
+  DAL: "America/Chicago", AUS: "America/Chicago", SAT: "America/Chicago", MSY: "America/Chicago",
+  BNA: "America/Chicago", MEM: "America/Chicago", BHM: "America/Chicago", OMA: "America/Chicago",
+  MCI: "America/Chicago", DSM: "America/Chicago",
+  // USA — Mountain
+  DEN: "America/Denver", SLC: "America/Denver", ABQ: "America/Denver", BOI: "America/Boise",
+  PHX: "America/Phoenix", TUS: "America/Phoenix", // Arizona: no DST
+  // USA — Pacific
+  LAX: "America/Los_Angeles", SFO: "America/Los_Angeles", SJC: "America/Los_Angeles",
+  OAK: "America/Los_Angeles", SAN: "America/Los_Angeles", SEA: "America/Los_Angeles",
+  PDX: "America/Los_Angeles", SMF: "America/Los_Angeles", BUR: "America/Los_Angeles",
+  LAS: "America/Los_Angeles", RNO: "America/Los_Angeles",
+  ANC: "America/Anchorage", HNL: "Pacific/Honolulu", OGG: "Pacific/Honolulu",
+  // Mexico / Caribbean / Central & South America
+  CUN: "America/Cancun", MEX: "America/Mexico_City", GDL: "America/Mexico_City", MTY: "America/Mexico_City",
+  SJD: "America/Mazatlan", PVR: "America/Bahia_Banderas",
+  NAS: "America/Nassau", MBJ: "America/Jamaica", KIN: "America/Jamaica", SJU: "America/Puerto_Rico",
+  HAV: "America/Havana", PTY: "America/Panama", BOG: "America/Bogota", MDE: "America/Bogota",
+  GRU: "America/Sao_Paulo", GIG: "America/Sao_Paulo", EZE: "America/Argentina/Buenos_Aires",
+  SCL: "America/Santiago", LIM: "America/Lima", UIO: "America/Guayaquil",
+  // UK / Ireland
+  LHR: "Europe/London", LGW: "Europe/London", STN: "Europe/London", LTN: "Europe/London",
+  LCY: "Europe/London", MAN: "Europe/London", EDI: "Europe/London", GLA: "Europe/London",
+  BHX: "Europe/London", BRS: "Europe/London", NCL: "Europe/London", BFS: "Europe/London",
+  DUB: "Europe/Dublin", SNN: "Europe/Dublin",
+  // Western/Central Europe
+  CDG: "Europe/Paris", ORY: "Europe/Paris", NCE: "Europe/Paris", LYS: "Europe/Paris", MRS: "Europe/Paris",
+  FRA: "Europe/Berlin", MUC: "Europe/Berlin", BER: "Europe/Berlin", HAM: "Europe/Berlin", DUS: "Europe/Berlin",
+  AMS: "Europe/Amsterdam", BRU: "Europe/Brussels", LUX: "Europe/Luxembourg",
+  ZRH: "Europe/Zurich", GVA: "Europe/Zurich", VIE: "Europe/Vienna",
+  MAD: "Europe/Madrid", BCN: "Europe/Madrid", PMI: "Europe/Madrid", AGP: "Europe/Madrid",
+  LIS: "Europe/Lisbon", OPO: "Europe/Lisbon",
+  FCO: "Europe/Rome", MXP: "Europe/Rome", VCE: "Europe/Rome", NAP: "Europe/Rome",
+  CPH: "Europe/Copenhagen", ARN: "Europe/Stockholm", OSL: "Europe/Oslo", HEL: "Europe/Helsinki",
+  PRG: "Europe/Prague", WAW: "Europe/Warsaw", BUD: "Europe/Budapest", ATH: "Europe/Athens",
+  // Middle East
+  DXB: "Asia/Dubai", AUH: "Asia/Dubai", SHJ: "Asia/Dubai", DOH: "Asia/Qatar", MCT: "Asia/Muscat",
+  KWI: "Asia/Kuwait", BAH: "Asia/Bahrain", RUH: "Asia/Riyadh", JED: "Asia/Riyadh",
+  AMM: "Asia/Amman", TLV: "Asia/Jerusalem",
+  // South / Southeast Asia
+  DEL: "Asia/Kolkata", BOM: "Asia/Kolkata", BLR: "Asia/Kolkata", MAA: "Asia/Kolkata",
+  CMB: "Asia/Colombo", DAC: "Asia/Dhaka", KTM: "Asia/Kathmandu",
+  BKK: "Asia/Bangkok", DMK: "Asia/Bangkok", SGN: "Asia/Ho_Chi_Minh", HAN: "Asia/Bangkok",
+  KUL: "Asia/Kuala_Lumpur", SIN: "Asia/Singapore", CGK: "Asia/Jakarta", MNL: "Asia/Manila",
+  // East Asia
+  HKG: "Asia/Hong_Kong", PEK: "Asia/Shanghai", PVG: "Asia/Shanghai", CAN: "Asia/Shanghai",
+  SZX: "Asia/Shanghai", TPE: "Asia/Taipei",
+  NRT: "Asia/Tokyo", HND: "Asia/Tokyo", KIX: "Asia/Tokyo", NGO: "Asia/Tokyo", CTS: "Asia/Tokyo",
+  FUK: "Asia/Tokyo", OKA: "Asia/Tokyo",
+  ICN: "Asia/Seoul", GMP: "Asia/Seoul",
+  // Australia / Pacific
+  SYD: "Australia/Sydney", MEL: "Australia/Sydney", CBR: "Australia/Sydney",
+  BNE: "Australia/Brisbane", OOL: "Australia/Brisbane", CNS: "Australia/Brisbane",
+  PER: "Australia/Perth", ADL: "Australia/Adelaide", AKL: "Pacific/Auckland",
+  // Africa
+  JNB: "Africa/Johannesburg", CPT: "Africa/Johannesburg", NBO: "Africa/Nairobi",
+  CAI: "Africa/Cairo", CMN: "Africa/Casablanca", ACC: "Africa/Accra", LOS: "Africa/Lagos",
+};
+
+// Real, DST-aware UTC offset (in minutes) for an IANA timezone at a given
+// moment, via Intl — no hardcoded "PST is UTC-8" table that goes wrong for
+// half the year. Returns 0 (treated as "unknown") if the zone isn't valid.
+function getUtcOffsetMinutes(ianaZone, date = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: ianaZone, timeZoneName: "shortOffset" }).formatToParts(date);
+    const offsetPart = parts.find(p => p.type === "timeZoneName")?.value || "";
+    const match = offsetPart.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+    if (!match) return null;
+    const hours = parseInt(match[1], 10);
+    const minutes = match[2] ? parseInt(match[2], 10) : 0;
+    return hours * 60 + (hours < 0 ? -minutes : minutes);
+  } catch {
+    return null;
+  }
+}
+
+// Direction + magnitude for ONE leg, computed from real airport UTC offsets
+// — destination ahead of departure = eastbound = hours LOST; destination
+// behind = westbound = hours GAINED. Normalizes to the shorter way around
+// the clock for the date-line case: a raw +17h "ahead" (e.g. YVR->NRT) is
+// really a -7h jump the other way around, i.e. westbound/gained, not a
+// 17-hour eastbound loss. Returns null if either airport is unknown or the
+// legs are in the same zone (no meaningful direction to report).
+function computeLegDirection(fromStr, toStr, date = new Date()) {
+  const fromCode = extractAirportCode(fromStr);
+  const toCode = extractAirportCode(toStr);
+  if (!fromCode || !toCode || fromCode === toCode) return null;
+  const fromZone = AIRPORT_TIMEZONE[fromCode];
+  const toZone = AIRPORT_TIMEZONE[toCode];
+  if (!fromZone || !toZone) return null;
+  const fromOffset = getUtcOffsetMinutes(fromZone, date);
+  const toOffset = getUtcOffsetMinutes(toZone, date);
+  if (fromOffset === null || toOffset === null) return null;
+  let diffMinutes = toOffset - fromOffset;
+  if (diffMinutes > 12 * 60) diffMinutes -= 24 * 60;
+  if (diffMinutes < -12 * 60) diffMinutes += 24 * 60;
+  const hours = Math.round(diffMinutes / 60);
+  if (hours === 0) return null;
+  return { direction: hours > 0 ? "east" : "west", hours: Math.abs(hours), fromCode, toCode };
+}
+
+// The leg actually flown to reach day N's location: day 1 is departure ->
+// destinations[0]; day N (N>=2) is destinations[N-2] -> destinations[N-1].
+// This is what makes the computation per-LEG rather than per-pairing or
+// "first leg only" — a 3-day pairing with a different destination each day
+// has up to 3 distinct legs, each potentially a different direction.
+function computeLegForDay(data, dayNum) {
+  const destinations = data.destinations || [];
+  const prevLocation = dayNum <= 1 ? data.departure : destinations[dayNum - 2];
+  const currLocation = destinations[dayNum - 1] || data.departure;
+  return computeLegDirection(prevLocation, currLocation);
+}
+
+function getCognitivePerfRules(data, leg) {
   const reportTime = (data.report_time || "").trim();
   const dutyHours = parseInt(data.duty_hours, 10) || 0;
   const layoverType = (data.layover_type || "").trim();
   const layoverInBase = data.layover_in_base === "yes";
-  const flightDir = (data.flight_direction || "").trim();
 
-  if (!reportTime && !dutyHours && !layoverType && !flightDir) return null;
+  if (!reportTime && !dutyHours && !layoverType && !leg) return null;
 
   const rules = [];
 
@@ -1548,10 +1701,16 @@ function getCognitivePerfRules(data) {
     rules.push(`LONG LAYOVER (24h+): Full recovery window. Day 1 layover: hydrate aggressively, eat anti-inflammatory foods (berries, omega-3 fish, leafy greens). Day 2: align meal timing with destination time zone. Prioritize recovery sleep nutrition (tryptophan, magnesium-rich foods).`);
   }
 
-  if (flightDir === "east") {
-    rules.push(`EASTWARD FLIGHT (advance circadian): Circadian advance is harder. At destination: eat melatonin-supporting foods in the evening (tart cherries, kiwi, walnuts). Avoid late-night eating — it delays the advance. Get bright-light exposure in the morning at destination.`);
-  } else if (flightDir === "west") {
-    rules.push(`WESTWARD FLIGHT (delay circadian): Body adjusts more easily westward. Allow slightly later meal timing at destination. Bright light exposure in the evening at destination accelerates adjustment.`);
+  // Direction is now derived from real airport UTC offsets (computeLegDirection),
+  // never asked of the crew member — see AIRPORT_TIMEZONE above. "east"/direction
+  // words here are internal labels for the model's reasoning only; the
+  // user-facing jetlagNote text this feeds is separately instructed (see
+  // buildAllDaysPrompt) to phrase everything in local time and gained/lost
+  // hours, never "eastward"/"westward".
+  if (leg?.direction === "east") {
+    rules.push(`LOSING ${leg.hours} HOURS THIS LEG (circadian advance — the harder direction): Circadian advance is harder than delay. At destination: eat melatonin-supporting foods in the evening (tart cherries, kiwi, walnuts). Avoid late-night eating — it delays the advance. Get bright-light exposure in the morning at destination. Expect the crew member to feel hungry/sleepy at times that don't match the local clock for the first couple of days.`);
+  } else if (leg?.direction === "west") {
+    rules.push(`GAINING ${leg.hours} HOURS THIS LEG (circadian delay — the easier direction): Body adjusts more easily when gaining hours than losing them. Allow slightly later meal timing at destination. Bright light exposure in the evening at destination accelerates adjustment. The crew member may feel wide awake well past their normal bedtime for the first night or two.`);
   }
 
   return rules.length > 0
@@ -1650,10 +1809,19 @@ function buildContext(data, lang, pairingDays) {
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
-  const cognitivePerfRules = getCognitivePerfRules(data);
+  // buildContext doesn't know which specific day/leg is being generated (it's
+  // shared by many call sites, only some of which are per-day) — this is the
+  // pairing-level default (leg 1: departure -> destinations[0]), used as-is
+  // for the top-level performanceAdvisory summary field. The per-day
+  // generation loop (generateOneDay) overrides ctx.cognitivePerfRules and
+  // ctx.leg with the CORRECT leg for whichever day it's actually building —
+  // that override, not this default, is what the circadian meal-timing
+  // logic and jetlagNote instruction actually consume.
+  const firstLeg = computeLegForDay(data, 1);
+  const cognitivePerfRules = getCognitivePerfRules(data, firstLeg);
   const restrictedBorders = detectRestrictedBorders(data.destinations, data.going_usa, data.departure);
 
-  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules, restrictedBorders };
+  return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules, restrictedBorders, leg: firstLeg };
 }
 
 // day.label is regenerated server-side rather than trusted from the model —
@@ -1674,8 +1842,13 @@ function buildAllDaysPrompt(data, pairingDays, ctx, startDayNum = 1) {
   const daySpecs = Array.from({ length: pairingDays }, (_, i) => {
     const dayNum = startDayNum + i;
     const loc = ctx.destinations[startDayNum - 1 + i] || data.departure;
-    const jetlagInstr = ctx.jetlag && dayNum === 1
-      ? `jetlagNote: short, practical meal-timing advice for adjusting to the jet lag above. Phrase purely in ${loc} local time — no cross-timezone clock conversions, no "eastward"/"westward" direction.`
+    // Gated on THIS day's actual leg (ctx.legDirection/ctx.legHours, set
+    // per-day by generateOneDay via computeLegForDay) — not ctx.jetlag &&
+    // dayNum === 1, which only ever looked at the first leg of the whole
+    // pairing. A 4+ pairing with jet lag only on day 3 must still get a
+    // jetlagNote on day 3, not just day 1.
+    const jetlagInstr = ctx.legDirection && ctx.legHours >= 3
+      ? `jetlagNote: short, practical meal-timing advice for adjusting to ${ctx.legHours === 1 ? "1 hour" : `${ctx.legHours} hours`} ${ctx.legDirection === "east" ? "lost" : "gained"} on this leg. Phrase purely in ${loc} local time and in terms of hours gained/lost (e.g. "you'll lose/gain N hours") — never use the words "eastbound"/"westbound"/"eastward"/"westward". Where useful, name the practical body-clock consequence (e.g. "your body clock will want dinner around 2am local time").`
       : `jetlagNote: null`;
     const budgetLine = ctx.hasBudget
       ? `Budget: ~$${ctx.perDayBudget.toFixed(2)} USD for today's ingredients near ${loc}.`
@@ -2577,7 +2750,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         days: guardedBankDays,
         groceryList: entry.groceryList,
         foodRestrictions: entry.foodRestrictions,
-        performanceAdvisory: getCognitivePerfRules(data),
+        performanceAdvisory: getCognitivePerfRules(data, ctx.leg),
         hydration: computeHydration(data),
         pairingCount: usage.pairingCount,
         isPremium: usage.isPremium,
@@ -2679,6 +2852,14 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         // if it were a single day's budget, e.g. "$300 total for 5 days" becomes
         // "$300/day" in this day's prompt instead of the correct $60/day.
         const dayCtx = buildContext(dayData, lang, pairingDays);
+        // buildContext only knows the pairing-level FIRST leg (see firstLeg
+        // there) — override with the leg for the SPECIFIC day being
+        // generated here, so a multi-day pairing gets correct, independently
+        // computed circadian guidance for every day, not just day 1.
+        const dayLeg = computeLegForDay(dayData, overallDayNum);
+        dayCtx.cognitivePerfRules = getCognitivePerfRules(dayData, dayLeg);
+        dayCtx.legDirection = dayLeg?.direction || null;
+        dayCtx.legHours = dayLeg?.hours || 0;
 
         // 4200 tokens: the richer per-meal schema (structured ingredients,
         // allergens_present, diet_tags, prep_method) plus verbose multi-country
@@ -2872,7 +3053,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       days,
       groceryList: extras.groceryList,
       foodRestrictions: extras.foodRestrictions,
-      performanceAdvisory: getCognitivePerfRules(data),
+      performanceAdvisory: getCognitivePerfRules(data, ctx.leg),
       hydration: computeHydration(data),
       pairingCount: usage.pairingCount,
       isPremium: usage.isPremium,
@@ -3928,11 +4109,21 @@ app.post("/api/jetlag-plan", apiLimiter, async (req, res) => {
       });
     }
 
-    const direction = tz > 0 ? "eastward (destination is ahead in time)" : "westward (destination is behind in time)";
+    // Prefer the real derived leg (airport UTC offsets) over the client-
+    // supplied `timezone` number — same reasoning as AIRPORT_TIMEZONE/
+    // computeLegDirection above: direction should never be trusted from the
+    // client, only computed. Falls back to the client's tz/sign only when
+    // one of the airports isn't in AIRPORT_TIMEZONE.
+    const derivedLeg = computeLegDirection(departure, destination);
+    const hours = derivedLeg ? derivedLeg.hours : Math.abs(tz);
+    const losingHours = derivedLeg ? derivedLeg.direction === "east" : tz > 0;
+    const direction = losingHours
+      ? `losing ${hours} hours (destination's clock is ahead — circadian advance, the harder direction to adjust to)`
+      : `gaining ${hours} hours (destination's clock is behind — circadian delay, the easier direction to adjust to)`;
     const dietLine = Array.isArray(diets) && diets.length ? diets.join(", ") : "no restrictions";
-    const prompt = `Create a short, practical jetlag meal-timing plan for a flight crew member flying ${direction}, ${Math.abs(tz)} hours time difference, from ${departure} to ${destination}. Diet: ${dietLine}.
+    const prompt = `Create a short, practical jetlag meal-timing plan for a flight crew member ${direction}, flying from ${departure} to ${destination}. Diet: ${dietLine}.
 
-Cover: the travel day, plus the first 2 days at the destination. For each entry give a label (e.g. "Travel day", "Day 1 in ${destination}") and 2-4 short, concrete meal-timing actions stated in destination local time (specific times, what to eat or avoid, hydration, caffeine cutoff). Be specific to the direction and size of the time difference — no generic advice.
+Cover: the travel day, plus the first 2 days at the destination. For each entry give a label (e.g. "Travel day", "Day 1 in ${destination}") and 2-4 short, concrete meal-timing actions stated in destination local time (specific times, what to eat or avoid, hydration, caffeine cutoff). Be specific to the direction and size of the time difference — no generic advice. Phrase everything in terms of hours gained/lost (e.g. "you're losing/gaining N hours") — never use the words "eastward"/"westward"/"eastbound"/"westbound" anywhere in the response.
 
 Respond in ${lang === "fr" ? "French" : lang === "es" ? "Spanish" : "English"}. Return compact JSON, no commentary.`;
 
@@ -4165,5 +4356,6 @@ export {
   USER_ALLERGY_TO_TAGS, DIET_PROHIBITED, KITCHEN_PREP_METHOD_ALLOW, MEAL_SCHEMA,
   findMealPortionScaleViolation, findMealTitleViolation, findMealIconViolation,
   getMealHeroCategory, findCrossDayVarietyViolations, titlesShareSignificantPattern,
+  computeLegDirection, computeLegForDay, AIRPORT_TIMEZONE, getCognitivePerfRules,
 };
 export default app;
