@@ -166,6 +166,12 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
 // this every 5 min to prevent Render free-tier cold starts.
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// Lets the frontend mirror the trial feature flag instead of hardcoding it,
+// so flipping TRIAL_ENABLED here is the ONLY change needed to switch the
+// whole product (checkout behavior + paywall copy) between the launch model
+// and the trial campaign. No auth — this is a non-sensitive display flag.
+app.get("/api/config", (_req, res) => res.json({ trialEnabled: TRIAL_ENABLED }));
+
 // Default express.json() body limit is 100kb — far too small for the roster
 // upload endpoint, which sends up to 4 base64-encoded photos in one request.
 // A single real phone-camera photo alone can exceed 100kb by 10-50x.
@@ -181,6 +187,23 @@ const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SEC
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://nutricrew.ca";
 // Free trial length before the first real charge — change this one constant to adjust it.
 const TRIAL_DAYS = 30;
+
+// Launch monetization model: 1 free pairing (see FREE_PAIRING_LIMIT in
+// NutriCrew/server.js), then an immediate paid subscription — no trial. All
+// trial mechanics below (trial_period_days at checkout, the webhook's
+// trialEnd bookkeeping, the frontend's trial UI copy) stay fully intact and
+// are simply skipped while this is false, so setting TRIAL_ENABLED=true
+// later (e.g. for a re-engagement campaign) restores the trial flow without
+// any code changes. GET /api/config exposes this to the frontend so its
+// copy stays in sync with actual checkout behavior.
+const TRIAL_ENABLED = process.env.TRIAL_ENABLED === "true";
+// The frontend never renders this string (it routes on the "premium_required"
+// error code and shows its own localized PremiumScreen copy) — kept flag-
+// aware anyway so no trial language survives anywhere a client might log or
+// display it verbatim.
+const PREMIUM_REQUIRED_MESSAGE = TRIAL_ENABLED
+  ? "A Premium subscription is required to generate plans. Start your free month for unlimited plans."
+  : "Subscribe for unlimited plans — $7.99/month.";
 
 const CRUD_API_BASE = process.env.CRUD_API_BASE;
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
@@ -2717,7 +2740,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       if (!usage.allowed) {
         return res.status(403).json({
           error: "premium_required",
-          message: "A Premium subscription is required to generate plans. Start your free month for unlimited plans.",
+          message: PREMIUM_REQUIRED_MESSAGE,
           pairingCount: usage.pairingCount,
           needsPremium: true,
         });
@@ -2773,7 +2796,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     if (!usage.allowed) {
       return res.status(403).json({
         error: "premium_required",
-        message: "A Premium subscription is required to generate plans. Start your free month for unlimited plans.",
+        message: PREMIUM_REQUIRED_MESSAGE,
         pairingCount: usage.pairingCount,
         needsPremium: true,
       });
@@ -4205,7 +4228,8 @@ app.post("/api/create-checkout-session", async (req, res) => {
     // and skip trial_period_days so they can't restart the free trial by
     // simply upgrading again. Same-card-different-email abuse is handled by
     // Stripe Radar's built-in "block if card used for a trial before" rule
-    // (configured in the Stripe dashboard, not here).
+    // (configured in the Stripe dashboard, not here). Only relevant while
+    // TRIAL_ENABLED is true — see below.
     const existingCustomerId = await getExistingStripeCustomerId(normalizedEmail);
     const isReturningCustomer = !!existingCustomerId;
 
@@ -4219,12 +4243,15 @@ app.post("/api/create-checkout-session", async (req, res) => {
       metadata: { email: normalizedEmail },
       subscription_data: {
         metadata: { email: normalizedEmail },
-        ...(isReturningCustomer ? {} : { trial_period_days: TRIAL_DAYS }),
+        // Launch model: no trial, charge begins immediately (see TRIAL_ENABLED
+        // above). Setting TRIAL_ENABLED=true restores the original
+        // trial_period_days behavior exactly as it was, untouched.
+        ...(TRIAL_ENABLED && !isReturningCustomer ? { trial_period_days: TRIAL_DAYS } : {}),
       },
       line_items: [{
         price_data: {
           currency: "usd",
-          unit_amount: isAnnual ? 6712 : 799, // annual $67.12 = 30% off 12×$7.99 ($95.88); monthly $7.99
+          unit_amount: isAnnual ? 6232 : 799, // annual $62.32 = 35% off 12×$7.99 ($95.88); monthly $7.99
           recurring: { interval: isAnnual ? "year" : "month" },
           product_data: {
             name: isAnnual ? "NutriCrew Premium (Annual)" : "NutriCrew Premium (Monthly)",
@@ -4303,7 +4330,7 @@ app.post("/api/switch-to-annual", async (req, res) => {
         id: item.id,
         price_data: {
           currency: "usd",
-          unit_amount: 6712, // matches the paywall's annual price ($67.12 = 30% off 12×$7.99)
+          unit_amount: 6232, // matches the paywall's annual price ($62.32 = 35% off 12×$7.99)
           recurring: { interval: "year" },
           product: typeof item.price.product === "string" ? item.price.product : item.price.product.id,
         },
@@ -4357,5 +4384,6 @@ export {
   findMealPortionScaleViolation, findMealTitleViolation, findMealIconViolation,
   getMealHeroCategory, findCrossDayVarietyViolations, titlesShareSignificantPattern,
   computeLegDirection, computeLegForDay, AIRPORT_TIMEZONE, getCognitivePerfRules,
+  TRIAL_ENABLED, TRIAL_DAYS, PREMIUM_REQUIRED_MESSAGE,
 };
 export default app;
