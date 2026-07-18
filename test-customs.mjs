@@ -1,8 +1,11 @@
-// Live test for the carried-food customs fix.
-// Three scenarios:
-//   1. USA only (going_usa=yes, JFK on day 1)       — carried note mentions USA
-//   2. USA day 1 + Japan day 2 (NRT)                — carried note mentions BOTH, union bans
-//   3. No restricted country (YOW — Ottawa, Canada) — NO carried note (regression check)
+// Live test for the carried-food customs fix. Country/customs derivation is
+// fully automatic from airport codes now — no going_usa (or any other
+// country) flag is ever sent in the request, by design.
+// Scenarios:
+//   1. USA only (JFK on day 1)                          — carried note mentions USA
+//   2. USA day 1 + Japan day 2 (NRT)                     — carried note mentions BOTH, union bans
+//   3. YUL -> FLL -> NRT (the acceptance-criteria route) — usa + japan derived, zero flags
+//   4. No restricted country (YOW — Ottawa, Canada)      — NO carried note (regression check)
 
 const BACKEND = "https://nutricrew-backend.vercel.app";
 const EMAIL   = "renatogadeabi@gmail.com";
@@ -16,20 +19,26 @@ const BASE = {
 
 const SCENARIOS = [
   {
-    label: "Scenario 1 — USA only (JFK day 1, going_usa=yes)",
-    data: { ...BASE, pairing_days: "1", destinations: ["JFK"], going_usa: "yes" },
+    label: "Scenario 1 — USA only (JFK day 1), derived with zero flags",
+    data: { ...BASE, pairing_days: "1", destinations: ["JFK"] },
     expectCountries: ["USA"],
     expectNoCarried: false,
   },
   {
-    label: "Scenario 2 — USA day 1 + Japan day 2 (union)",
-    data: { ...BASE, pairing_days: "2", destinations: ["JFK", "NRT"], going_usa: "yes" },
+    label: "Scenario 2 — USA day 1 + Japan day 2 (union), derived with zero flags",
+    data: { ...BASE, pairing_days: "2", destinations: ["JFK", "NRT"] },
     expectCountries: ["USA", "Japan"],
     expectNoCarried: false,
   },
   {
-    label: "Scenario 3 — No restricted country (Ottawa, no going_usa)",
-    data: { ...BASE, pairing_days: "1", destinations: ["YOW"], going_usa: "no" },
+    label: "Scenario 3 — Acceptance route: YUL -> FLL -> NRT",
+    data: { ...BASE, departure: "YUL", pairing_days: "2", destinations: ["FLL", "NRT"] },
+    expectCountries: ["USA", "Japan"],
+    expectNoCarried: false,
+  },
+  {
+    label: "Scenario 4 — No restricted country (Ottawa)",
+    data: { ...BASE, pairing_days: "1", destinations: ["YOW"] },
     expectCountries: [],
     expectNoCarried: true,
   },

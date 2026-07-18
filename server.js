@@ -2117,7 +2117,6 @@ function buildContext(data, lang, pairingDays) {
 - Goals: ${goals.join(", ") || "none specified"}
 - Budget: ${budgetLine}
 - Route: ${data.departure} -> ${destinations.join(" -> ")}
-- Going to USA: ${data.going_usa}
 - Jet lag (timezone diff): ${data.timezone || 0} hours${jetlag ? " -- SIGNIFICANT JET LAG, adjust meal timing for circadian rhythm" : ""}
 - Kitchen access: ${(data.kitchen || []).join(", ") || "full_kitchen"} (see KITCHEN ACCESS CONSTRAINTS below for what's actually possible)${lunchBag ? `\n- Lunch bag size: ${lunchBag}` : ""}${airplaneMealDesc ? `\n- Airplane meal (provided on board): ${airplaneMealDesc}` : ""}`;
 
@@ -2131,7 +2130,7 @@ function buildContext(data, lang, pairingDays) {
   // logic and jetlagNote instruction actually consume.
   const firstLeg = computeLegForDay(data, 1);
   const cognitivePerfRules = getCognitivePerfRules(data, firstLeg);
-  const restrictedBorders = detectRestrictedBorders(data.destinations, data.going_usa, data.departure);
+  const restrictedBorders = detectRestrictedBorders(data.destinations, data.departure);
 
   return { langName, dietLabel, rawDiets, jetlag, destinations, profile, hasBudget, perDayBudget, budgetGuidance, calorieTarget, calorieDeficitAmount, gainTarget, maintenanceTarget, goals, kitchenAccessBlock, dietRules, lunchBag, airplaneMealDesc, cookingGuidance, cognitivePerfRules, restrictedBorders, leg: firstLeg };
 }
@@ -2229,15 +2228,17 @@ ${hydrationBlock}`;
 }
 
 function getDestinationFoodRules(destinations) {
-  const dest = (destinations || []).join(" ").toUpperCase();
+  // Derives which countries this itinerary touches purely from airport codes
+  // (same lookup detectRestrictedBorders uses) — no user-supplied flag, no
+  // guessing, and a destination that can't be resolved simply contributes
+  // nothing here rather than blocking or asking.
+  const countries = new Set((destinations || []).map(d => getCountryForAirport(extractAirportCode(d))).filter(Boolean));
   const rules = [];
-
-  const hasAny = (codes) => codes.some(c => dest.includes(c));
 
   const DISCLAIMER = "\n⚠️ Rules can change — always verify with the destination country's official customs/border authority or IATA travel advisories before your pairing.";
 
   // UK — all major airports including secondary London airports
-  if (hasAny(["LHR", "LGW", "LTN", "LCY", "STN", "MAN", "EDI", "GLA", "BHX", "BRS", "NCL", "LBA", "ABZ", "BFS", "BHD", "SOU", "EXT", "CWL"])) {
+  if (countries.has("uk")) {
     rules.push(`UNITED KINGDOM CUSTOMS (HMRC/DEFRA):
 - NO meat or dairy products from outside the UK (post-Brexit rules; EU products now restricted like non-EU).
 - Fresh fruit and vegetables from non-EU countries may require phytosanitary certificates.
@@ -2247,28 +2248,7 @@ function getDestinationFoodRules(destinations) {
   }
 
   // EU / Schengen — France, Germany, Benelux, Netherlands, Spain, Italy, Portugal, Austria, Switzerland, Scandinavia, Eastern Europe, Ireland, Greece
-  if (hasAny([
-    // France
-    "CDG", "ORY", "NCE", "LYS", "MRS", "TLS", "NTE", "BOD", "SXB", "MPL", "LIL",
-    // Germany
-    "FRA", "MUC", "BER", "HAM", "DUS", "CGN", "STR", "NUE", "HAJ", "DTM", "LEJ",
-    // Netherlands / Belgium / Luxembourg
-    "AMS", "EIN", "BRU", "CRL", "LUX",
-    // Spain / Portugal
-    "MAD", "BCN", "PMI", "AGP", "ALC", "VLC", "SVQ", "LIS", "OPO", "FAO",
-    // Italy
-    "FCO", "MXP", "LIN", "NAP", "VCE", "BLQ", "CTA", "BGY", "PMO",
-    // Austria / Switzerland
-    "VIE", "SZG", "ZRH", "GVA", "BSL",
-    // Scandinavia
-    "ARN", "GOT", "MMX", "CPH", "AAL", "BLL", "HEL", "TMP", "OSL", "BGO", "TRD",
-    // Eastern Europe
-    "WAW", "KRK", "PRG", "BUD", "OTP", "SOF", "LJU", "ZAG", "RIX", "TLL", "VNO",
-    // Greece / Cyprus / Malta
-    "ATH", "SKG", "HER", "RHO", "MLA",
-    // Ireland
-    "DUB", "ORK", "SNN",
-  ])) {
+  if (countries.has("eu")) {
     rules.push(`EU / SCHENGEN AREA CUSTOMS:
 - Travelers from outside the EU: NO meat or dairy products allowed (strict EU animal health rules).
 - Fresh fruits and vegetables from non-EU countries prohibited without an official phytosanitary certificate.
@@ -2278,7 +2258,7 @@ function getDestinationFoodRules(destinations) {
   }
 
   // Japan
-  if (hasAny(["NRT", "HND", "KIX", "NGO", "CTS", "FUK", "OKA", "OIT", "KMI", "KMJ", "SDJ"])) {
+  if (countries.has("japan")) {
     rules.push(`JAPAN CUSTOMS (Ministry of Agriculture, Forestry and Fisheries):
 - Strict plant quarantine: fresh fruits and vegetables from most countries prohibited; must be inspected and certified.
 - Meat products from many countries restricted or banned (especially pork from countries with foot-and-mouth disease).
@@ -2289,7 +2269,7 @@ function getDestinationFoodRules(destinations) {
   }
 
   // Australia
-  if (hasAny(["SYD", "MEL", "BNE", "PER", "ADL", "CBR", "OOL", "CNS", "DRW", "HBA", "TSV", "MKY", "ROK", "LST"])) {
+  if (countries.has("australia")) {
     rules.push(`AUSTRALIA CUSTOMS (DAFF — Department of Agriculture, Fisheries and Forestry):
 - VERY strict biosecurity — one of the strictest in the world.
 - ALL fresh or dried fruit, vegetables, meat, eggs, seeds, nuts, and plant material must be declared.
@@ -2300,14 +2280,7 @@ function getDestinationFoodRules(destinations) {
   }
 
   // UAE / Gulf States — UAE, Qatar, Oman, Kuwait, Bahrain, Saudi Arabia
-  if (hasAny([
-    // UAE
-    "DXB", "AUH", "SHJ", "DWC", "AAN", "RKT", "FJR",
-    // Qatar / Oman / Kuwait / Bahrain
-    "DOH", "MCT", "SLL", "KWI", "BAH",
-    // Saudi Arabia
-    "RUH", "JED", "DMM", "MED", "TUU", "AHB", "GIZ",
-  ])) {
+  if (countries.has("uae")) {
     rules.push(`UAE / GULF STATES CUSTOMS:
 - Pork products and alcohol are restricted or prohibited in most Gulf states.
   - UAE: pork available only in licensed shops; personal import is restricted.
@@ -2320,7 +2293,7 @@ function getDestinationFoodRules(destinations) {
   }
 
   // Mexico
-  if (hasAny(["MEX", "CUN", "GDL", "MTY", "TLC", "SJD", "PVR", "MID", "OAX", "VER", "TAM", "ZIH", "MZT", "HMO", "CUU", "TIJ", "MXL", "LAP", "MLM", "BJX", "QRO"])) {
+  if (countries.has("mexico")) {
     rules.push(`MEXICO CUSTOMS (SAT / SENASICA):
 - Duty-free personal allowance: USD $500 in goods per adult (air travel).
 - Fresh fruits, vegetables, and unprocessed meat products from abroad may be restricted — SENASICA inspects for agricultural pests.
@@ -2330,7 +2303,7 @@ function getDestinationFoodRules(destinations) {
   }
 
   // Canada
-  if (hasAny(["YYZ", "YUL", "YVR", "YYC", "YEG", "YOW", "YHZ", "YWG", "YQB", "YXE", "YQR", "YYJ", "YXX", "YYT", "YFC", "YHM", "YKF", "YLW"])) {
+  if (countries.has("canada")) {
     rules.push(`CANADA CUSTOMS (CBSA):
 - Most commercially packaged, sealed food products are permitted.
 - Fresh fruits and vegetables may be restricted depending on origin country (declare and let CBSA inspect).
@@ -2377,7 +2350,6 @@ const BORDER_COUNTRY_RULES = [
   {
     id: "usa",
     name: { en: "USA (CBP/USDA)", fr: "États-Unis (CBP/USDA)", es: "Estados Unidos (CBP/USDA)" },
-    usaFlagTrigger: true,
     codes: [
       "JFK","LAX","ORD","ATL","DFW","DEN","SFO","SEA","MIA","BOS","IAD","IAH",
       "PHX","MCO","LAS","MSP","DTW","FLL","CLT","EWR","PHL","SLC","MDW","BWI",
@@ -2454,7 +2426,59 @@ const BORDER_COUNTRY_RULES = [
       { en: "Plants, seeds, or soil-bearing plant material", fr: "Plantes, graines ou matériel végétal contenant de la terre", es: "Plantas, semillas o material vegetal con tierra" },
     ],
   },
+  {
+    id: "mexico",
+    name: { en: "Mexico (SAT/SENASICA)", fr: "Mexique (SAT/SENASICA)", es: "México (SAT/SENASICA)" },
+    codes: ["MEX","CUN","GDL","MTY","TLC","SJD","PVR","MID","OAX","VER","TAM","ZIH","MZT","HMO","CUU","TIJ","MXL","LAP","MLM","BJX","QRO"],
+    carriedBans: [
+      { en: "Fresh fruits and vegetables (subject to SENASICA agricultural-pest inspection)", fr: "Fruits et légumes frais (soumis à l'inspection phytosanitaire de la SENASICA)", es: "Frutas y verduras frescas (sujetas a inspección fitosanitaria de SENASICA)" },
+      { en: "Raw or unprocessed meat products", fr: "Viande crue ou non transformée", es: "Carne cruda o sin procesar" },
+    ],
+  },
 ];
+
+// Fallback country derivation for any airport not in one of the curated
+// BORDER_COUNTRY_RULES.codes lists above (those lists cover the major
+// airports for each country's customs regime, not every airport on earth).
+// Reuses AIRPORT_TIMEZONE — already comprehensive across far more airports
+// than any single customs list — so a country is still resolved without
+// ever having to ask the crew member to confirm it themselves.
+const TIMEZONE_TO_BORDER_COUNTRY = {
+  "America/Toronto": "canada", "America/Vancouver": "canada", "America/Edmonton": "canada",
+  "America/Winnipeg": "canada", "America/Moncton": "canada", "America/Regina": "canada",
+  "America/Halifax": "canada", "America/St_Johns": "canada", "America/Yellowknife": "canada",
+  "America/New_York": "usa", "America/Chicago": "usa", "America/Denver": "usa",
+  "America/Boise": "usa", "America/Phoenix": "usa", "America/Los_Angeles": "usa",
+  "America/Anchorage": "usa", "Pacific/Honolulu": "usa",
+  "America/Cancun": "mexico", "America/Mexico_City": "mexico", "America/Mazatlan": "mexico",
+  "America/Bahia_Banderas": "mexico",
+  "Europe/London": "uk",
+  "Europe/Paris": "eu", "Europe/Berlin": "eu", "Europe/Amsterdam": "eu", "Europe/Brussels": "eu",
+  "Europe/Luxembourg": "eu", "Europe/Zurich": "eu", "Europe/Vienna": "eu", "Europe/Madrid": "eu",
+  "Europe/Lisbon": "eu", "Europe/Rome": "eu", "Europe/Copenhagen": "eu", "Europe/Stockholm": "eu",
+  "Europe/Oslo": "eu", "Europe/Helsinki": "eu", "Europe/Prague": "eu", "Europe/Warsaw": "eu",
+  "Europe/Budapest": "eu", "Europe/Athens": "eu", "Europe/Dublin": "eu",
+  "Asia/Dubai": "uae", "Asia/Qatar": "uae", "Asia/Muscat": "uae", "Asia/Kuwait": "uae",
+  "Asia/Bahrain": "uae", "Asia/Riyadh": "uae",
+  "Asia/Tokyo": "japan",
+  "Australia/Sydney": "australia", "Australia/Brisbane": "australia", "Australia/Perth": "australia",
+  "Australia/Adelaide": "australia",
+};
+
+// Resolves any airport code to a BORDER_COUNTRY_RULES id (or null if it
+// can't be resolved at all) — never asks the crew member, always derives.
+// Checks the curated codes lists first (exact customs-regime membership),
+// then falls back to the IANA-timezone-based mapping above for broader
+// coverage. Returns null (not a guess) for anything unresolvable, which
+// callers treat as "no rule applies" rather than blocking the user.
+function getCountryForAirport(code) {
+  if (!code) return null;
+  for (const rule of BORDER_COUNTRY_RULES) {
+    if (rule.codes.includes(code)) return rule.id;
+  }
+  const zone = AIRPORT_TIMEZONE[code];
+  return (zone && TIMEZONE_TO_BORDER_COUNTRY[zone]) || null;
+}
 
 // Returns array of restricted-border entries that apply to this pairing.
 // Each entry carries the days[] it was detected on (empty = triggered by going_usa flag
@@ -2472,17 +2496,16 @@ function extractAirportCode(str) {
 // e.g. a Canada-based crew member flying to the USA and back would never see
 // Canada's own carried-food restrictions applied to whatever they bought
 // abroad and are bringing home.
-function detectRestrictedBorders(destinations, goingUsa, departure) {
+function detectRestrictedBorders(destinations, departure) {
   const dests = destinations || [];
   const found = [];
   for (const rule of BORDER_COUNTRY_RULES) {
     const days = [];
     dests.forEach((d, i) => {
-      if (d && rule.codes.includes(extractAirportCode(d))) days.push(i + 1);
+      if (d && getCountryForAirport(extractAirportCode(d)) === rule.id) days.push(i + 1);
     });
-    const onReturn = !!(departure && rule.codes.includes(extractAirportCode(departure)));
-    const triggered = days.length > 0 || onReturn || (rule.usaFlagTrigger && goingUsa === "yes");
-    if (triggered) found.push({ id: rule.id, name: rule.name, carriedBans: rule.carriedBans, days, onReturn });
+    const onReturn = getCountryForAirport(extractAirportCode(departure)) === rule.id;
+    if (days.length > 0 || onReturn) found.push({ id: rule.id, name: rule.name, carriedBans: rule.carriedBans, days, onReturn });
   }
   return found;
 }
@@ -2603,7 +2626,7 @@ Generate the SUMMARY, GROCERY LIST, and FOOD RESTRICTIONS sections for this ${pa
 Respond ONLY in ${ctx.langName}. Return ONLY valid JSON matching the schema.
 - "summary": 2-sentence overview of the whole plan${ctx.calorieTarget ? `, noting that it targets a daily calorie deficit (~${ctx.calorieTarget} kcal/day) to support healthy, sustainable weight loss` : ctx.gainTarget ? `, noting that it targets a calorie surplus (~${ctx.gainTarget} kcal/day) to support healthy weight and muscle gain` : ""}.
 - "groceryList": categorized shopping list (produce, protein, pantry, snacks, dairy) for items to buy at home and CARRY on the pairing. IMPORTANT: (1) every item must comply with the DIET RULES above; (2) if CROSS-BORDER CARRIED-FOOD RULES are stated above, EVERY item in the grocery list must comply — do not include any banned carried item; (3) base items on kitchen access constraints${ctx.hasBudget ? `; (4) keep total costs within $${(ctx.perDayBudget * pairingDays).toFixed(2)} (USD-equivalent) for the whole trip` : ""}.
-- "foodRestrictions": "usa" (${data.going_usa === "yes" ? "practical list of what cannot be brought into the USA and why" : "Not applicable — not traveling to the USA"}), "destination" (summarize the DESTINATION CUSTOMS & FOOD RULES above into practical crew-focused bullet points for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
+- "foodRestrictions": "usa" (${ctx.restrictedBorders.some(b => b.id === "usa") ? "practical list of what cannot be brought into the USA and why" : "Not applicable — not traveling to the USA"}), "destination" (summarize the DESTINATION CUSTOMS & FOOD RULES above into practical crew-focused bullet points for ${ctx.destinations.join(", ")}), "general" (general tips for a ${ctx.dietLabel} diet while traveling).`;
 }
 
 app.get("/", (req, res) => {
@@ -2939,7 +2962,7 @@ async function storeCachedDays(days, cacheKey) {
 function buildExtrasCacheKey(data, ctx, lang, pairingDays) {
   const base = buildCacheKey(data, ctx, lang);
   const destinations = (data.destinations || []).slice().sort();
-  return { ...base, destinationKey: destinations.join(",") || "none", goingUsa: data.going_usa === "yes" ? "yes" : "no", pairingDays };
+  return { ...base, destinationKey: destinations.join(",") || "none", goingUsa: ctx.restrictedBorders.some(b => b.id === "usa") ? "yes" : "no", pairingDays };
 }
 
 async function queryExtrasCache(extrasKey) {
@@ -3499,11 +3522,16 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
     const extras = await extrasPromise;
 
-    // Inject the server-computed carried-food note (deterministic, not from the model).
+    // Inject server-computed, deterministic (not model-generated) fields:
+    // the carried-food note, and whether the USA card should show at all —
+    // derived the same way as everything else in ctx.restrictedBorders, so
+    // the client never needs its own copy of a going-to-USA flag to decide.
     const carriedNote = buildCarriedFoodNote(ctx.restrictedBorders, lang);
-    if (carriedNote) {
-      extras.foodRestrictions = { ...extras.foodRestrictions, carried: carriedNote };
-    }
+    extras.foodRestrictions = {
+      ...extras.foodRestrictions,
+      ...(carriedNote ? { carried: carriedNote } : {}),
+      usaApplies: ctx.restrictedBorders.some(b => b.id === "usa"),
+    };
 
     // Fire-and-forget: doesn't gate anything. The pairing count itself was
     // already atomically consumed by reservePairingUsage above.
@@ -4850,5 +4878,7 @@ export {
   WALL_RULES, runWallOnMeal, runWallOnDayScope, runWallOnPlanScope,
   hasBlockingViolation, repairableViolations, runJudge, JUDGE_SCHEMA,
   WALL_VIOLATION_LOG, logWallViolation, DAYS_SCHEMA,
+  BORDER_COUNTRY_RULES, getCountryForAirport, detectRestrictedBorders,
+  getDestinationFoodRules, unionCarriedBans, extractAirportCode,
 };
 export default app;

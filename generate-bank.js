@@ -354,7 +354,7 @@ async function main() {
             email: "bank-gen@internal", name: "Bank Gen", gender: "female",
             weight: "70kg", dob: "1996-01-01", position: "cabin",
             diets: [diet.key], goals: [], kitchen: [kitchen.key],
-            departure: "YYZ", destinations: ["LAX"], going_usa: "no", timezone: "0",
+            departure: "YYZ", destinations: ["LAX"], timezone: "0",
           };
           let wallCheck = validatePlan({ days }, fakeUserProfile, "en");
           let wallRetries = 0;

@@ -45,7 +45,7 @@ const DIET_PLANS = [
 
 const BASE_PROFILE = {
   name: "Test User", position: "cabin", gender: "female", weight: "70kg", dob: "1994-01-01",
-  departure: "YOW", destinations: ["YOW"], going_usa: "no", timezone: "0",
+  departure: "YOW", destinations: ["YOW"], timezone: "0",
   kitchen: ["full_kitchen"], goals: [], pairing_days: "3",
 };
 

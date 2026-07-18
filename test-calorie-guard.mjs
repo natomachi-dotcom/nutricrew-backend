@@ -19,7 +19,6 @@ const data = {
   pairing_days: "1",
   departure: "YYZ",
   destinations: ["LAX"],
-  going_usa: "no",
   timezone: "0",
 };
 

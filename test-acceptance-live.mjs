@@ -34,7 +34,7 @@ function reportMeal(m) {
 
 const BASE_PROFILE = {
   name: "Test User", position: "cabin", departure: "YYZ", destinations: ["YOW"],
-  going_usa: "no", timezone: "0", goals: [],
+  timezone: "0", goals: [],
 };
 
 // ── Call 1: peanut + dairy allergy, 3-day pairing ────────────────────────
