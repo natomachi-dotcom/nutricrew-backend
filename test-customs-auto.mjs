@@ -6,8 +6,18 @@
 process.env.VERCEL = "1";
 const {
   BORDER_COUNTRY_RULES, getCountryForAirport, detectRestrictedBorders,
-  getDestinationFoodRules, unionCarriedBans,
+  getDestinationFoodRules, unionCarriedBans, WALL_RULES, runWallOnPlanScope,
 } = await import("./server.js");
+
+// Shared meal factory for the Wall-rule tests below.
+function meal(overrides = {}) {
+  return {
+    type: "Breakfast", name: "Oatmeal with Berries", description: "x", prep: "5 min",
+    prep_method: "microwave", calories: 450, protein: 15, carbs: 60, fat: 12,
+    tags: [], tip: "", ingredients: [{ name: "oats", quantity: 1, unit: "cup" }],
+    estimated_cost: 5, hero_ingredient: "oats", ...overrides,
+  };
+}
 
 let passed = 0, failed = 0;
 function check(label, cond) {
@@ -99,6 +109,107 @@ console.log("─".repeat(60));
   const borders = detectRestrictedBorders(["Nowhereville (ZZZ)"], "Montreal (YUL)");
   check("Unresolvable destination triggers no destination-side border rule",
     !borders.some(b => b.days.includes(1)));
+}
+
+console.log("\n" + "═".repeat(60));
+console.log("Wall rule: customs_matches_destination (plan scope, REPAIR)");
+console.log("─".repeat(60));
+{
+  const rule = WALL_RULES.find(r => r.id === "customs_matches_destination");
+  check("rule is registered", !!rule);
+  check("severity is REPAIR", rule?.severity === "REPAIR");
+  check("scope is plan", rule?.scope === "plan");
+}
+
+{
+  // Correctly derived AND correctly applied — must not fire.
+  const days = [{ day: 1, meals: [meal()] }];
+  const borders = detectRestrictedBorders(["Fort Lauderdale (FLL)"], "Montreal (YUL)");
+  const violations = runWallOnPlanScope(days, {
+    destinations: ["Fort Lauderdale (FLL)"], departure: "Montreal (YUL)",
+    restrictedBorders: borders, kitchen: ["hotel"],
+  });
+  check("no violation when applied rules already match the derived destination",
+    !violations.some(v => v.ruleId === "customs_matches_destination"), JSON.stringify(violations));
+}
+
+{
+  // The exact failure mode from the spec: a US destination, but the rules
+  // actually applied during generation (simulated stale/broken lookup) are
+  // empty — must FAIL, and must be attributable to the right day, with no
+  // mealIndex (nothing to meal-repair; the whole day needs regenerating).
+  const days = [{ day: 1, meals: [meal()] }];
+  const violations = runWallOnPlanScope(days, {
+    destinations: ["Fort Lauderdale (FLL)"], departure: "Montreal (YUL)",
+    restrictedBorders: [], // simulates the lookup silently breaking
+    kitchen: ["hotel"],
+  });
+  const v = violations.find(x => x.ruleId === "customs_matches_destination" && x.code === "CUSTOMS_MISMATCH");
+  check("FLL destination with no applied rules -> CUSTOMS_MISMATCH violation", !!v, JSON.stringify(violations));
+  check("violation is attributed to day 1", v?.day === 1);
+  check("violation has no mealIndex (whole day must be regenerated, not one meal)", v?.mealIndex === undefined);
+  check("wallMessage mentions regenerating the day", /[Rr]egenerate/.test(v?.wallMessage || ""));
+}
+
+{
+  // A destination resolved to the WRONG country (Japan applied instead of
+  // USA for an FLL day) — set mismatch even though something was applied.
+  const days = [{ day: 1, meals: [meal()] }];
+  const wrongBorders = detectRestrictedBorders(["Tokyo (NRT)"], "Montreal (YUL)"); // japan, not usa
+  const violations = runWallOnPlanScope(days, {
+    destinations: ["Fort Lauderdale (FLL)"], departure: "Montreal (YUL)",
+    restrictedBorders: wrongBorders, kitchen: ["hotel"],
+  });
+  const v = violations.find(x => x.ruleId === "customs_matches_destination" && x.code === "CUSTOMS_MISMATCH");
+  check("wrong country applied (japan instead of usa) -> CUSTOMS_MISMATCH", !!v, JSON.stringify(violations));
+}
+
+{
+  // Rules correctly derived AND applied, but a carried meal still contains
+  // a banned fresh item — the independent per-meal recheck must catch it,
+  // attributing it to the specific meal (mealIndex present, repairable).
+  const days = [{
+    day: 1,
+    meals: [meal({ ingredients: [{ name: "fresh apple", quantity: 1, unit: "" }] })],
+  }];
+  const borders = detectRestrictedBorders(["Fort Lauderdale (FLL)"], "Montreal (YUL)");
+  const violations = runWallOnPlanScope(days, {
+    destinations: ["Fort Lauderdale (FLL)"], departure: "Montreal (YUL)",
+    restrictedBorders: borders, kitchen: ["hotel"],
+  });
+  const v = violations.find(x => x.ruleId === "customs_matches_destination" && x.code === "CUSTOMS_UNION");
+  check("a carried fresh-fruit meal fails the independent union recheck", !!v, JSON.stringify(violations));
+  check("violation carries day AND mealIndex (single-meal repairable)", v?.day === 1 && v?.mealIndex === 0);
+}
+
+{
+  // Multi-country pairing (the acceptance scenario): applied rules already
+  // cover BOTH usa and japan correctly — must not fire.
+  const destinations = ["Fort Lauderdale (FLL)", "Tokyo (NRT)"];
+  const departure = "Montreal (YUL)";
+  const borders = detectRestrictedBorders(destinations, departure);
+  const days = [
+    { day: 1, meals: [meal()] },
+    { day: 2, meals: [meal({ type: "Snack", name: "Green Tea Mochi", hero_ingredient: "mochi" })] },
+  ];
+  const violations = runWallOnPlanScope(days, {
+    destinations, departure, restrictedBorders: borders, kitchen: ["hotel"],
+  });
+  check("YUL -> FLL -> NRT with correctly-applied usa+japan rules does not fire",
+    !violations.some(v => v.ruleId === "customs_matches_destination"), JSON.stringify(violations));
+}
+
+{
+  // Defensive: a caller that doesn't supply a ruleCtx at all (e.g. an
+  // isolated test of a different plan-scope rule) must not crash and must
+  // not spuriously fire — this rule degrades to a no-op without context.
+  const days = [{ day: 1, meals: [meal()] }];
+  let threw = false;
+  let violations = [];
+  try { violations = runWallOnPlanScope(days); } catch { threw = true; }
+  check("runWallOnPlanScope(days) with no ruleCtx doesn't throw", !threw);
+  check("...and doesn't spuriously fire customs_matches_destination",
+    !violations.some(v => v.ruleId === "customs_matches_destination"));
 }
 
 console.log("\n" + "═".repeat(60));

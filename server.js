@@ -1387,6 +1387,72 @@ const WALL_RULES = [
     },
     message: (v) => `${v.detail}. Replace this meal with a genuinely different dish — different hero ingredient AND different title pattern from the other day.`,
   },
+  {
+    id: "customs_matches_destination",
+    severity: "REPAIR",
+    scope: "plan",
+    // Doesn't trust ruleCtx.restrictedBorders (what generation actually used)
+    // as ground truth — RE-DERIVES the expected country set fresh from the
+    // pairing's raw destinations/departure, the exact same way
+    // detectRestrictedBorders always has. If the two disagree, the
+    // airport->country lookup silently broke somewhere between prompt-build
+    // time and now (wrong country, or a border that should have fired but
+    // didn't) — a plan generated under the wrong/missing ruleset can't be
+    // patched meal-by-meal, so the whole day(s) touching the missing
+    // country are marked for full regeneration instead. Independently of
+    // that, every meal in every day NOT already being regenerated is
+    // re-checked against the union of the recomputed border set, exactly
+    // mirroring customs_carried_food's per-meal check but against fresh
+    // data — this is the safety net for the case where restrictedBorders'
+    // ID set matched but its content (carriedBans) somehow didn't.
+    check: (days, ruleCtx = {}) => {
+      const violations = [];
+      const expected = detectRestrictedBorders(ruleCtx.destinations, ruleCtx.departure);
+      const expectedIds = expected.map(b => b.id).sort().join(",");
+      const appliedBorders = ruleCtx.restrictedBorders || [];
+      const appliedIds = appliedBorders.map(b => b.id).sort().join(",");
+      const mismatchedDayNums = new Set();
+
+      if (expectedIds !== appliedIds) {
+        const missing = expected.filter(b => !appliedBorders.some(a => a.id === b.id));
+        for (const b of missing) {
+          b.days.forEach(d => mismatchedDayNums.add(d));
+          if (b.onReturn) { const last = days[days.length - 1]; if (last) mismatchedDayNums.add(last.day); }
+        }
+        // A mismatch was detected but couldn't be pinned to a specific day
+        // (shouldn't happen given detectRestrictedBorders' own contract) —
+        // fail every day rather than let anything ship unchecked.
+        if (missing.length > 0 && mismatchedDayNums.size === 0) days.forEach(d => mismatchedDayNums.add(d.day));
+        for (const dayNum of mismatchedDayNums) {
+          violations.push({
+            code: "CUSTOMS_MISMATCH", day: dayNum,
+            detail: `derived destination countries [${expectedIds || "none"}] don't match the customs rules actually applied to this plan [${appliedIds || "none"}]`,
+          });
+        }
+      }
+
+      // Independent per-meal re-check against the RECOMPUTED border set —
+      // skips days already flagged above (they're being fully regenerated,
+      // and checking meals about to be discarded just races the day-failure
+      // write below with a meal-index write on the same day).
+      for (const day of days) {
+        if (mismatchedDayNums.has(day.day) || !Array.isArray(day.meals)) continue;
+        const rawKitchen = Array.isArray(ruleCtx.kitchen_by_day)
+          ? (ruleCtx.kitchen_by_day[(day.day || 1) - 1] || ruleCtx.kitchen || [])
+          : (ruleCtx.kitchen || []);
+        const kitchenList = Array.isArray(rawKitchen) ? rawKitchen : (rawKitchen ? [rawKitchen] : []);
+        day.meals.forEach((meal, mealIndex) => {
+          const v = findMealCustomsViolation(meal, expected, kitchenList);
+          if (v) violations.push({ ...v, code: "CUSTOMS_UNION", day: day.day, mealIndex, mealType: meal.type, mealName: meal.name });
+        });
+      }
+
+      return { pass: violations.length === 0, violations };
+    },
+    message: (v) => v.code === "CUSTOMS_MISMATCH"
+      ? `${v.detail}. Regenerate this day so it's built under the correct cross-border carried-food constraints for its actual destination country.`
+      : `${v.detail}. This item can't be packed/carried given the full set of restricted countries in this pairing — swap it for a commercially sealed/shelf-stable alternative.`,
+  },
 ];
 
 // ─── OBSERVABILITY ───────────────────────────────────────────────────────
@@ -1446,15 +1512,16 @@ function runWallOnDayScope(meals, ruleCtx) {
   return violations.map(v => ({ ...v, wallMessage: computeWallMessage(v) }));
 }
 
-function runWallOnPlanScope(days) {
+function runWallOnPlanScope(days, ruleCtx) {
   const violations = [];
   for (const rule of WALL_RULES) {
     if (rule.scope !== "plan") continue;
-    const { violations: ruleViolations } = rule.check(days);
+    const { violations: ruleViolations } = rule.check(days, ruleCtx);
     for (const v of ruleViolations) violations.push({ ...v, ruleId: rule.id, severity: rule.severity });
   }
-  // Plan-scope (variety) violations already carry mealType/mealName from
-  // findCrossDayVarietyViolations itself, so the full shape exists already.
+  // Plan-scope violations already carry day (and, where meal-repairable,
+  // mealType/mealName) from their own check() above, so the full shape
+  // exists already — no deferred-assembly step needed like meal/day scope.
   return violations.map(v => ({ ...v, wallMessage: computeWallMessage(v) }));
 }
 
@@ -1526,7 +1593,12 @@ function validatePlan(plan, userProfile, lang = "en") {
     for (const v of violations) allViolations.push({ ...v, day: dayNum });
   });
 
-  for (const v of runWallOnPlanScope(days)) allViolations.push(v);
+  const planRuleCtx = {
+    destinations: userProfile.destinations, departure: userProfile.departure,
+    restrictedBorders: ctx.restrictedBorders,
+    kitchen_by_day: userProfile.kitchen_by_day, kitchen: userProfile.kitchen,
+  };
+  for (const v of runWallOnPlanScope(days, planRuleCtx)) allViolations.push(v);
 
   return { valid: allViolations.length === 0, violations: allViolations };
 }
@@ -3474,13 +3546,23 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${failedCount} failed extras=${cachedExtras ? "cache" : "ai"}`);
     }
 
-    // Cross-day variety (the Wall's "variety" plan-scope rule) runs across
-    // the WHOLE assembled plan — days generate independently (parallel, for
-    // latency), so a same-slot hero/title repeat across consecutive days can
-    // only be caught here, after assembly. Repair is targeted (just the
-    // specific colliding meal, on the LATER day) rather than a full
-    // day-level regeneration, to keep this bounded and fast.
-    const crossDayViolations = runWallOnPlanScope(days);
+    // Plan-scope rules ("variety" and "customs_matches_destination") run
+    // across the WHOLE assembled plan — days generate independently
+    // (parallel, for latency), so a same-slot hero/title repeat, or a
+    // destination whose customs rules silently didn't get applied, can only
+    // be caught here, after assembly. Repair is targeted where possible
+    // (just the specific colliding/non-compliant meal, on the affected day)
+    // rather than a full day-level regeneration, to keep this bounded and
+    // fast — except customs_matches_destination's CUSTOMS_MISMATCH
+    // violations, which have no single meal to swap (the whole day was
+    // built without the right constraints) and go straight to "mark day
+    // failed" below instead of attempting a meal-level fix.
+    const planRuleCtx = {
+      destinations: data.destinations, departure: data.departure,
+      restrictedBorders: ctx.restrictedBorders,
+      kitchen_by_day: data.kitchen_by_day, kitchen: data.kitchen,
+    };
+    const crossDayViolations = runWallOnPlanScope(days, planRuleCtx);
     if (crossDayViolations.length > 0) {
       const { tags: requiredAllergenTags, customAllergyTerm } = getUserRequiredAllergenAvoidance(data);
       const rawDietsForRepair = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
@@ -3488,7 +3570,16 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       await Promise.all(crossDayViolations.map(async (v) => {
         logWallViolation({ ...v, day: v.day, attempt: 0, source: "cross-day" });
         const targetDay = days.find(d => d.day === v.day);
-        if (!targetDay || targetDay.failed || !Array.isArray(targetDay.meals)) return;
+        if (!targetDay || targetDay.failed) return;
+        if (v.mealIndex === undefined) {
+          // No single meal to swap (e.g. CUSTOMS_MISMATCH) — the day was
+          // generated without the right constraints entirely, so a full
+          // regeneration is the only correct fix.
+          console.error(`[validator] day=${v.day} ${v.ruleId} is plan-level, not meal-repairable — marking day failed: ${v.detail}`);
+          targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
+          return;
+        }
+        if (!Array.isArray(targetDay.meals)) return;
         const meal = targetDay.meals[v.mealIndex];
         if (!meal) return;
         const rawKitchen = Array.isArray(data.kitchen_by_day)
