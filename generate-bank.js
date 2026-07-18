@@ -16,6 +16,18 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 try { require("dotenv").config(); } catch {}
 
+// The Wall runs on WRITE here, not just on read (server.js's rawBankEntries
+// filter in /api/generate-plan) — an entry that would fail the Wall is
+// caught and retried/discarded HERE, before it ever reaches plans-bank.json,
+// instead of silently wasting spend on an entry that gets discarded at serve
+// time every single time it's looked up. Reuses the real, single source of
+// truth (server.js's own validatePlan/WALL_RULES) rather than maintaining a
+// second copy of the validation logic — VERCEL=1 stops server.js's
+// module-level app.listen() from binding a port on import, same pattern the
+// test-*.mjs files in this repo already use.
+process.env.VERCEL = "1";
+const { validatePlan } = await import("./server.js");
+
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-haiku-4-5-20251001";
 const OUT = "./plans-bank.json";
@@ -26,7 +38,7 @@ const OUT = "./plans-bank.json";
 // writes to. A mismatch here silently makes every entry this script produces
 // unreachable (this has already happened twice: once from a missing version
 // segment entirely, once from a stale "hotel_no_kitchen" kitchen key).
-const CACHE_SCHEMA_VERSION = "v9";
+const CACHE_SCHEMA_VERSION = "v10";
 
 // ─── SCHEMAS (must match server.js) ──────────────────────────────
 // server.js's hard validator (validatePlan) now runs against EVERY bank
@@ -67,6 +79,10 @@ const MEAL_SCHEMA = {
       },
       description: "Every distinct ingredient in this meal, listed separately — never omit one because it seems minor.",
     },
+    hero_ingredient: {
+      type: "string",
+      description: "The single defining main component of this dish, in one or two words, e.g. \"salmon\", \"oats\", \"chicken\" — never the diet name.",
+    },
     estimated_cost: { type: "number", description: "Estimated USD-equivalent cost of this meal's ingredients for a single portion." },
     allergens_present: {
       type: "array",
@@ -87,7 +103,7 @@ const MEAL_SCHEMA = {
     recyclingTip: { type: "string" },
     emoji: { type: "string" },
   },
-  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients", "estimated_cost", "allergens_present", "diet_tags", "prep_method"],
+  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients", "hero_ingredient", "estimated_cost", "allergens_present", "diet_tags", "prep_method"],
   additionalProperties: false,
 };
 
@@ -199,6 +215,8 @@ Rules:
 - Vary meals significantly across days — different ingredients, cuisines, and preparation styles.
 - The "prep" field must respect the kitchen access constraint above.
 - List EVERY distinct ingredient in "ingredients" (as {name, quantity, unit}) — however minor. This is the primary signal a downstream automated allergen check relies on; an incomplete list is treated as a failure.
+- "hero_ingredient": the single defining main component in one or two words (e.g. "salmon", "oats", "tofu") — never the diet name. Vary this across days within the same slot; do not repeat the same hero_ingredient in the same meal slot on consecutive days.
+- Canned/oily fish (sardines, anchovies, mackerel, tuna), shellfish, and dinner-format dishes (stews, curries, pasta, rice-and-meat) are NEVER breakfast, no matter how well they satisfy the diet — smoked salmon on a bagel is fine, a tin of sardines on yogurt or oats is not. A Snack must be snack-scale, never a full plated dinner-format main. Dinner/Lunch must be a substantial main, never an appetizer/charcuterie plate. Titles must name the dish, not the diet, in 6 words or fewer.
 - "allergens_present" must honestly include every major allergen this meal's ingredients touch, including hidden/derivative sources (e.g. Worcestershire sauce -> fish; soy sauce -> wheat + soy; pesto -> tree_nuts). Allergies stated in DIETARY REQUIREMENT above are absolute prohibitions, not preferences — leave out anything even plausibly a hidden source.
 - "estimated_cost" must be a realistic USD-equivalent estimate for one portion.
 - "prep_method" (no_cook / microwave / stove_oven / airplane_provided) must match what's actually achievable under KITCHEN ACCESS above.
@@ -313,7 +331,7 @@ async function main() {
             `days ${diet.key}×${kitchen.key}×${pairingDays}d`
           );
 
-          const days = daysResult.days.map((d, i) => ({
+          let days = daysResult.days.map((d, i) => ({
             day: i + 1,
             label: d.label || `Day ${i + 1}`,
             jetlagNote: null,
@@ -321,6 +339,47 @@ async function main() {
             meals: d.meals,
             totalCalories: d.meals.reduce((s, m) => s + (m.calories || 0), 0),
           }));
+
+          // ── VALIDATE-ON-WRITE ─────────────────────────────────────
+          // server.js's rawBankEntries filter already re-validates every
+          // bank entry on READ before serving it — but an entry that fails
+          // there is silently discarded and falls through to live
+          // generation EVERY time it's looked up, wasting the spend that
+          // built it in the first place. Catching it HERE, before it's ever
+          // written, means a bad combo gets retried a bounded number of
+          // times and then openly skipped (see the console.error below) —
+          // visible in this script's own output, not a silent runtime
+          // discard nobody notices.
+          const fakeUserProfile = {
+            email: "bank-gen@internal", name: "Bank Gen", gender: "female",
+            weight: "70kg", dob: "1996-01-01", position: "cabin",
+            diets: [diet.key], goals: [], kitchen: [kitchen.key],
+            departure: "YYZ", destinations: ["LAX"], going_usa: "no", timezone: "0",
+          };
+          let wallCheck = validatePlan({ days }, fakeUserProfile, "en");
+          let wallRetries = 0;
+          while (!wallCheck.valid && wallRetries < 2) {
+            wallRetries++;
+            console.warn(`    [wall] entry failed validation (attempt ${wallRetries}), regenerating: ${wallCheck.violations.map(v => `${v.ruleId ?? v.code}(day${v.day ?? "?"}${v.mealName ? `,"${v.mealName}"` : ""}: ${v.detail})`).join("; ")}`);
+            const retryResult = await withRetry(
+              () => runStructured(buildDaysPrompt(pairingDays, diet.label, kitchen.label), DAYS_SCHEMA, maxDayTokens),
+              `days retry ${diet.key}×${kitchen.key}×${pairingDays}d`
+            );
+            days = retryResult.days.map((d, i) => ({
+              day: i + 1,
+              label: d.label || `Day ${i + 1}`,
+              jetlagNote: null,
+              hydrationNote: d.hydrationNote || null,
+              meals: d.meals,
+              totalCalories: d.meals.reduce((s, m) => s + (m.calories || 0), 0),
+            }));
+            wallCheck = validatePlan({ days }, fakeUserProfile, "en");
+          }
+          if (!wallCheck.valid) {
+            console.error(`[${combo}/${totalCombos}] SKIP ${bankKey} — still failed the Wall after ${wallRetries} retries: ${wallCheck.violations.map(v => `${v.ruleId ?? v.code}(${v.detail})`).join("; ")}`);
+            skipped++;
+            continue;
+          }
 
           // Step 2: Generate extras
           const extrasResult = await withRetry(

@@ -172,6 +172,33 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // and the trial campaign. No auth — this is a non-sensitive display flag.
 app.get("/api/config", (_req, res) => res.json({ trialEnabled: TRIAL_ENABLED }));
 
+// Observability for the Wall: which rules fire most often tells you exactly
+// where the GENERATION PROMPT is weak, so it gets tightened with evidence
+// instead of guessing. Internal-key gated (same shared-secret convention as
+// every other service-to-service call in this file) since it exposes recent
+// violation detail, not meant for the public frontend. Reflects only THIS
+// serverless instance's in-memory log since its last cold start — see
+// WALL_VIOLATION_LOG's own comment for why that's a debugging aid, not a
+// durable cross-invocation analytics store.
+app.get("/api/wall-stats", (req, res) => {
+  if (!INTERNAL_API_KEY || req.headers["x-internal-key"] !== INTERNAL_API_KEY) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const counts = {};
+  for (const v of WALL_VIOLATION_LOG) {
+    const key = v.ruleId || v.code || "unknown";
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  const topRules = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([ruleId, count]) => ({ ruleId, count }));
+  res.json({
+    instanceTotalLogged: WALL_VIOLATION_LOG.length,
+    topRules,
+    recent: WALL_VIOLATION_LOG.slice(-50),
+  });
+});
+
 // Default express.json() body limit is 100kb — far too small for the roster
 // upload endpoint, which sends up to 4 base64-encoded photos in one request.
 // A single real phone-camera photo alone can exceed 100kb by 10-50x.
@@ -309,6 +336,10 @@ const MEAL_SCHEMA = {
       },
       description: "EVERY distinct ingredient in this meal, listed separately — never omit one because it seems minor; a crew member's allergy safety and the cost/allergen checks below depend on this list being complete.",
     },
+    hero_ingredient: {
+      type: "string",
+      description: "The single defining main component of this dish, in one or two words, e.g. \"salmon\", \"oats\", \"chicken\", \"tofu\" — what you'd say if someone asked \"what IS this, in one word?\". This is the actual PROTEIN OR PRIMARY COMPONENT of the dish, never the diet name. Used to guarantee real variety across days — a plan that names oats as breakfast twice in three days is exactly the failure mode this field exists to catch.",
+    },
     estimated_cost: {
       type: "number",
       description: "Estimated USD-equivalent cost of this meal's ingredients for the crew member's own single portion (not a whole recipe/family size).",
@@ -333,7 +364,7 @@ const MEAL_SCHEMA = {
     emoji: { type: "string" },
     container: { type: "string", description: "Recommended Tupperware/container size and shape for packing this meal, e.g. '500ml rectangular container' or '300ml round container with dividers'. Only include if a lunch bag size was provided." },
   },
-  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients", "estimated_cost", "allergens_present", "diet_tags", "prep_method"],
+  required: ["type", "name", "description", "prep", "calories", "protein", "carbs", "fat", "tip", "emoji", "ingredients", "hero_ingredient", "estimated_cost", "allergens_present", "diet_tags", "prep_method"],
   additionalProperties: false,
 };
 
@@ -1159,70 +1190,316 @@ function computeMealCost(meal) {
   return typeof meal.estimated_cost === "number" ? meal.estimated_cost : 0;
 }
 
-// Validates ONE already-generated day's meals against every constraint
-// category. Violations with a mealIndex are individually repairable (swap
-// just that meal); violations without one are about the COMBINATION of
-// meals (slot counts, day total) and need a full day regeneration.
-function validateDay(meals, { requiredAllergenTags, customAllergyTerm, activeDietTags, expectedStructure, calorieTarget, calorieTolerance, perDayBudget, kitchenList, restrictedBorders }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── THE WALL — LAYER 1: DETERMINISTIC RULE REGISTRY ────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Design principle: the model PROPOSES a plan, this registry VERIFIES it, and
+// nothing unverified reaches a user. Rules live here as a REGISTRY, not an
+// if-chain — the whole point is that a new production bug becomes ONE new
+// entry, permanently, instead of another prompt tweak the model complies
+// with only probabilistically (see git history: this exact bug class —
+// sardines-for-breakfast — recurred through three separate prompt-only
+// fixes before this file existed).
+//
+// Rule shape: { id, severity, scope, check(subject, ruleCtx) -> {pass, violations[]}, message(violation) -> string }
+//   scope "meal": subject = one meal object. Called once per meal.
+//   scope "day":  subject = that day's meals array. Called once per day.
+//   scope "plan": subject = the whole assembled `days` array. Called once.
+//   ruleCtx bundles the raw user profile plus every DERIVED value a rule
+//   might need (allergen tags, active diet tags, calorie/budget targets,
+//   kitchen access, restricted borders) — richer than "userProfile" alone,
+//   since most checks depend on values computed from it, not the raw fields.
+//
+// SEVERITY governs what happens next (see runWallOnMeal/generateOneDay):
+//   BLOCK  = never show, never repair-loop past it. Fail closed immediately.
+//            Reserved for allergens — a missing plan is an inconvenience,
+//            an allergen violation is a medical emergency.
+//   REPAIR = send the violation back to the model and regenerate (bounded
+//            retries — see REPAIR_ATTEMPTS). Still refuses to serve if every
+//            attempt still fails.
+//   WARN   = logged for observability, never blocks or triggers repair. Used
+//            sparingly — currently only hero_ingredient_agreement, since the
+//            independent-inference check is heuristic and can disagree with
+//            a genuinely correct model answer.
+const WALL_RULES = [
+  {
+    id: "no_allergens",
+    severity: "BLOCK",
+    scope: "meal",
+    check: (meal, ruleCtx) => {
+      const violations = findMealAllergenViolations(meal, ruleCtx.requiredAllergenTags, ruleCtx.customAllergyTerm);
+      return { pass: violations.length === 0, violations };
+    },
+    message: (v) => v.source === "user"
+      ? `Contains "${v.detail}" — the crew member has personally flagged this as something they cannot eat.`
+      : `Contains/implies "${v.detail}" (detected via ${v.source}) which matches the user's required allergen avoidance "${v.tag}" — strictly forbidden, including this hidden/derivative form.`,
+  },
+  {
+    id: "diet_compliance",
+    severity: "REPAIR",
+    scope: "meal",
+    check: (meal, ruleCtx) => {
+      const violations = findMealDietViolations(meal, ruleCtx.activeDietTags);
+      return { pass: violations.length === 0, violations };
+    },
+    message: (v) => `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`,
+  },
+  {
+    id: "meal_slot_appropriateness",
+    severity: "REPAIR",
+    scope: "meal",
+    check: (meal) => {
+      const v = findMealSlotContentViolation(meal);
+      return { pass: !v, violations: v ? [v] : [] };
+    },
+    message: (v) => `${v.detail} — a normal person wouldn't recognize this as ${v.mealType} and eat it at that time of day. Replace it with a genuinely typical ${v.mealType} dish. If a protein/macro target is hard to hit with ${v.mealType}-appropriate foods, that's fine — the DAILY total across all meals is what matters, not this one meal in isolation.`,
+  },
+  {
+    id: "portion_scale",
+    severity: "REPAIR",
+    scope: "meal",
+    check: (meal, ruleCtx) => {
+      const v = findMealPortionScaleViolation(meal, ruleCtx.calorieTarget);
+      return { pass: !v, violations: v ? [v] : [] };
+    },
+    message: (v) => `${v.detail}. Rebuild this ${v.mealType} at the right scale for its slot.`,
+  },
+  {
+    id: "title_quality",
+    severity: "REPAIR",
+    scope: "meal",
+    check: (meal) => {
+      const v = findMealTitleViolation(meal);
+      return { pass: !v, violations: v ? [v] : [] };
+    },
+    message: (v) => `Title problem: ${v.detail}. Rename it to a short, plain menu-style name (max ${MAX_TITLE_CONTENT_WORDS} content words) that says what the dish IS — never the diet name (that's already shown separately as a tag).`,
+  },
+  {
+    id: "icon_match",
+    severity: "REPAIR",
+    scope: "meal",
+    check: (meal) => {
+      const v = findMealIconViolation(meal);
+      return { pass: !v, violations: v ? [v] : [] };
+    },
+    message: (v) => `${v.detail}. Pick an emoji that matches the meal's actual ingredients and slot.`,
+  },
+  {
+    id: "kitchen_access",
+    severity: "REPAIR",
+    scope: "meal",
+    check: (meal, ruleCtx) => {
+      const v = findMealKitchenViolation(meal, ruleCtx.kitchenList);
+      return { pass: !v, violations: v ? [v] : [] };
+    },
+    message: (v) => v.detail,
+  },
+  {
+    id: "customs_carried_food",
+    severity: "REPAIR",
+    scope: "meal",
+    check: (meal, ruleCtx) => {
+      const v = findMealCustomsViolation(meal, ruleCtx.restrictedBorders, ruleCtx.kitchenList);
+      return { pass: !v, violations: v ? [v] : [] };
+    },
+    message: (v) => v.detail,
+  },
+  // NEW — the model now self-declares hero_ingredient (see MEAL_SCHEMA); this
+  // rule independently infers a hero via the same regex table used for
+  // cross-day variety detection (getMealHeroCategory) and flags disagreement.
+  // WARN, not REPAIR: the inference is a heuristic bucket list, so a
+  // disagreement is a useful signal to review, not proof the model is wrong.
+  {
+    id: "hero_ingredient_agreement",
+    severity: "WARN",
+    scope: "meal",
+    check: (meal) => {
+      const declared = (meal.hero_ingredient || "").trim().toLowerCase();
+      const inferred = getMealHeroCategory(meal);
+      if (!declared || !inferred) return { pass: true, violations: [] };
+      const inferredWords = inferred.replace(/_/g, " ").split(" ");
+      const agrees = inferredWords.some(w => declared.includes(w)) || declared.split(/\s+/).some(w => inferred.includes(w));
+      if (agrees) return { pass: true, violations: [] };
+      return { pass: false, violations: [{ code: "HERO_MISMATCH", detail: `model declared hero_ingredient="${meal.hero_ingredient}" but independent inference from name/ingredients suggests "${inferred}"` }] };
+    },
+    message: (v) => v.detail,
+  },
+  {
+    id: "day_structure",
+    severity: "REPAIR",
+    scope: "day",
+    check: (meals, ruleCtx) => {
+      const violations = findDayStructureViolations(meals, ruleCtx.expectedStructure);
+      return { pass: violations.length === 0, violations };
+    },
+    message: (v) => `Day structure problem: ${v.detail}.`,
+  },
+  {
+    id: "calorie_accuracy",
+    severity: "REPAIR",
+    scope: "day",
+    // The displayed total is always the actual sum of meals
+    // (rescaleMealsToTarget guarantees this by construction before this ever
+    // runs) — this checks that sum lands within tolerance of the target.
+    check: (meals, ruleCtx) => {
+      if (!ruleCtx.calorieTarget) return { pass: true, violations: [] };
+      const total = (meals || []).reduce((s, m) => s + (m.calories || 0), 0);
+      const diff = Math.abs(total - ruleCtx.calorieTarget) / ruleCtx.calorieTarget;
+      if (diff <= ruleCtx.calorieTolerance) return { pass: true, violations: [] };
+      return { pass: false, violations: [{ code: "CALORIES", detail: `total ${total} kcal vs target ${ruleCtx.calorieTarget} kcal (${(diff * 100).toFixed(1)}% off, tolerance ${(ruleCtx.calorieTolerance * 100).toFixed(0)}%)` }] };
+    },
+    message: (v) => `${v.detail}. Rebalance portions across the day so the SUM of meal calories lands on target — the daily total is what's checked.`,
+  },
+  {
+    id: "budget",
+    severity: "REPAIR",
+    scope: "day",
+    check: (meals, ruleCtx) => {
+      if (!ruleCtx.perDayBudget) return { pass: true, violations: [] };
+      const totalCost = (meals || []).reduce((s, m) => s + computeMealCost(m), 0);
+      if (totalCost <= ruleCtx.perDayBudget) return { pass: true, violations: [] };
+      return { pass: false, violations: [{ code: "BUDGET", detail: `total $${totalCost.toFixed(2)} exceeds day budget $${ruleCtx.perDayBudget.toFixed(2)}` }] };
+    },
+    message: (v) => `${v.detail}. Use more affordable ingredients so the day's total cost fits the budget.`,
+  },
+  {
+    id: "low_carb_daily_limit",
+    severity: "REPAIR",
+    scope: "day",
+    check: (meals, ruleCtx) => {
+      if (!ruleCtx.activeDietTags.includes("low_carb")) return { pass: true, violations: [] };
+      const totalCarbs = (meals || []).reduce((s, m) => s + (m.carbs || 0), 0);
+      if (totalCarbs <= LOW_CARB_DAILY_LIMIT_G + 5) return { pass: true, violations: [] };
+      return { pass: false, violations: [{ code: "DIET", dietTag: "low_carb", detail: `total ${totalCarbs}g carbs exceeds ${LOW_CARB_DAILY_LIMIT_G}g/day limit` }] };
+    },
+    message: (v) => `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`,
+  },
+  {
+    id: "variety",
+    severity: "REPAIR",
+    scope: "plan",
+    // Runs across the WHOLE assembled plan, not per-day — days generate
+    // independently (parallel, for latency), so a same-slot repeat across
+    // consecutive days can only be caught here, after assembly.
+    check: (days) => {
+      const violations = findCrossDayVarietyViolations(days);
+      return { pass: violations.length === 0, violations };
+    },
+    message: (v) => `${v.detail}. Replace this meal with a genuinely different dish — different hero ingredient AND different title pattern from the other day.`,
+  },
+];
+
+// ─── OBSERVABILITY ───────────────────────────────────────────────────────
+// Every violation the Wall ever finds gets logged here, structured, whether
+// or not it ends up blocking/repairing anything — this is how the Wall gets
+// smarter over time: query which rules fire most often and tighten the
+// GENERATION PROMPT with evidence, instead of guessing. console.warn/.error
+// calls are captured durably by Vercel's runtime logs regardless of instance
+// lifetime; the in-memory ring buffer below additionally powers a live
+// same-instance summary via GET /api/wall-stats, but — because Vercel
+// serverless instances are not guaranteed to persist or be shared across
+// invocations — it should be treated as a debugging aid, not a durable
+// analytics store. A DB-backed table (via the CRUD backend) would be the
+// right follow-up for true cross-invocation aggregation.
+const WALL_LOG_MAX_ENTRIES = 1000;
+const WALL_VIOLATION_LOG = [];
+function logWallViolation(entry) {
+  const record = {
+    ruleId: entry.ruleId, severity: entry.severity, code: entry.code,
+    day: entry.day, mealIndex: entry.mealIndex, mealType: entry.mealType, mealName: entry.mealName,
+    detail: entry.detail, attempt: entry.attempt ?? 0, source: entry.source || "layer1",
+    timestamp: new Date().toISOString(),
+  };
+  WALL_VIOLATION_LOG.push(record);
+  if (WALL_VIOLATION_LOG.length > WALL_LOG_MAX_ENTRIES) WALL_VIOLATION_LOG.shift();
+  console.warn(`[wall] ${record.severity} ${record.ruleId} day=${record.day ?? "-"} attempt=${record.attempt} meal="${record.mealName ?? ""}" detail="${record.detail}"`);
+}
+
+// ─── ORCHESTRATOR ────────────────────────────────────────────────────────
+// The ONLY place each scope's rules get iterated — add a rule to WALL_RULES
+// above with the right `scope` and it starts running automatically here, no
+// other code change required. Every violation is tagged with ruleId/severity
+// so callers (generateOneDay's repair loop, the bank filter, the judge
+// layer) can branch on severity without re-deriving it. wallMessage is
+// deliberately NOT computed here — a rule's message() often references
+// mealType/mealName (e.g. "not appropriate for ${v.mealType}"), which for
+// meal-scope rules isn't attached until validateDay assembles the full
+// violation below; computing it here would bake in "undefined". See
+// computeWallMessage, called once the full violation shape exists.
+function runWallOnMeal(meal, ruleCtx) {
   const violations = [];
+  for (const rule of WALL_RULES) {
+    if (rule.scope !== "meal") continue;
+    const { violations: ruleViolations } = rule.check(meal, ruleCtx);
+    for (const v of ruleViolations) violations.push({ ...v, ruleId: rule.id, severity: rule.severity });
+  }
+  return violations;
+}
 
+function runWallOnDayScope(meals, ruleCtx) {
+  const violations = [];
+  for (const rule of WALL_RULES) {
+    if (rule.scope !== "day") continue;
+    const { violations: ruleViolations } = rule.check(meals, ruleCtx);
+    for (const v of ruleViolations) violations.push({ ...v, ruleId: rule.id, severity: rule.severity });
+  }
+  return violations.map(v => ({ ...v, wallMessage: computeWallMessage(v) }));
+}
+
+function runWallOnPlanScope(days) {
+  const violations = [];
+  for (const rule of WALL_RULES) {
+    if (rule.scope !== "plan") continue;
+    const { violations: ruleViolations } = rule.check(days);
+    for (const v of ruleViolations) violations.push({ ...v, ruleId: rule.id, severity: rule.severity });
+  }
+  // Plan-scope (variety) violations already carry mealType/mealName from
+  // findCrossDayVarietyViolations itself, so the full shape exists already.
+  return violations.map(v => ({ ...v, wallMessage: computeWallMessage(v) }));
+}
+
+function hasBlockingViolation(violations) {
+  return (violations || []).some(v => v.severity === "BLOCK");
+}
+function repairableViolations(violations) {
+  return (violations || []).filter(v => v.severity === "REPAIR");
+}
+
+// Looks up the rule that produced a violation and calls its message() now
+// that the violation carries its full shape (mealType/mealName included) —
+// this is the single point wallMessage ever gets computed, so every caller
+// sees the same, correctly-filled-in text.
+function computeWallMessage(v) {
+  const rule = WALL_RULES.find(r => r.id === v.ruleId);
+  return rule ? rule.message(v) : v.detail;
+}
+
+// Validates ONE already-generated day's meals against every registered
+// meal-scope and day-scope rule. Violations with a mealIndex are individually
+// repairable (swap just that meal); violations without one are about the
+// COMBINATION of meals (slot counts, day total) and need a full day
+// regeneration. Same name/signature as before the Wall existed — every
+// existing call site (bank filter, tests) keeps working unchanged; the
+// REGISTRY is what's new, not this function's contract.
+function validateDay(meals, ruleCtx) {
+  const violations = [];
   (meals || []).forEach((meal, mealIndex) => {
-    for (const v of findMealAllergenViolations(meal, requiredAllergenTags, customAllergyTerm)) {
-      violations.push({ ...v, mealIndex, mealType: meal.type, mealName: meal.name });
+    for (const v of runWallOnMeal(meal, ruleCtx)) {
+      const full = { ...v, mealIndex, mealType: meal.type, mealName: meal.name };
+      violations.push({ ...full, wallMessage: computeWallMessage(full) });
     }
-    for (const v of findMealDietViolations(meal, activeDietTags)) {
-      violations.push({ ...v, mealIndex, mealType: meal.type, mealName: meal.name });
-    }
-    const slotV = findMealSlotContentViolation(meal);
-    if (slotV) violations.push({ ...slotV, mealIndex, mealType: meal.type, mealName: meal.name });
-    const portionV = findMealPortionScaleViolation(meal, calorieTarget);
-    if (portionV) violations.push({ ...portionV, mealIndex, mealType: meal.type, mealName: meal.name });
-    const titleV = findMealTitleViolation(meal);
-    if (titleV) violations.push({ ...titleV, mealIndex, mealType: meal.type, mealName: meal.name });
-    const iconV = findMealIconViolation(meal);
-    if (iconV) violations.push({ ...iconV, mealIndex, mealType: meal.type, mealName: meal.name });
-    const kitchenV = findMealKitchenViolation(meal, kitchenList);
-    if (kitchenV) violations.push({ ...kitchenV, mealIndex, mealType: meal.type, mealName: meal.name });
-    const customsV = findMealCustomsViolation(meal, restrictedBorders, kitchenList);
-    if (customsV) violations.push({ ...customsV, mealIndex, mealType: meal.type, mealName: meal.name });
   });
-
-  for (const v of findDayStructureViolations(meals, expectedStructure)) violations.push(v);
-
-  // D. CALORIES — the displayed total is always the actual sum of meals
-  // (rescaleMealsToTarget guarantees this by construction, see below), and
-  // that sum must land within tolerance of the target.
-  const totalCalories = (meals || []).reduce((s, m) => s + (m.calories || 0), 0);
-  if (calorieTarget) {
-    const diff = Math.abs(totalCalories - calorieTarget) / calorieTarget;
-    if (diff > calorieTolerance) {
-      violations.push({ code: "CALORIES", detail: `total ${totalCalories} kcal vs target ${calorieTarget} kcal (${(diff * 100).toFixed(1)}% off, tolerance ${(calorieTolerance * 100).toFixed(0)}%)` });
-    }
-  }
-
-  // E. BUDGET
-  if (perDayBudget) {
-    const totalCost = (meals || []).reduce((s, m) => s + computeMealCost(m), 0);
-    if (totalCost > perDayBudget) {
-      violations.push({ code: "BUDGET", detail: `total $${totalCost.toFixed(2)} exceeds day budget $${perDayBudget.toFixed(2)}` });
-    }
-  }
-
-  // C (numeric part) — low-carb daily ceiling.
-  if (activeDietTags.includes("low_carb")) {
-    const totalCarbs = (meals || []).reduce((s, m) => s + (m.carbs || 0), 0);
-    if (totalCarbs > LOW_CARB_DAILY_LIMIT_G + 5) {
-      violations.push({ code: "DIET", dietTag: "low_carb", detail: `total ${totalCarbs}g carbs exceeds ${LOW_CARB_DAILY_LIMIT_G}g/day limit` });
-    }
-  }
-
+  for (const v of runWallOnDayScope(meals, ruleCtx)) violations.push(v);
   return { valid: violations.length === 0, violations };
 }
 
 // Public entry point: validatePlan(plan, userProfile). `plan` = { days: [{
 // meals }, ...] }. `userProfile` = the raw request `data` object (same shape
 // /api/generate-plan receives) — this is the single source of truth for
-// whether a plan is allowed to reach a client.
+// whether a plan is allowed to reach a client. Every code path that returns
+// plan content to a user routes through this (or validateDay directly, for
+// the per-day generation loop) — see the call-site audit in
+// test-the-wall.mjs for the full enumeration.
 function validatePlan(plan, userProfile, lang = "en") {
   const days = plan?.days || [];
   const pairingDays = days.length || 1;
@@ -1249,13 +1526,20 @@ function validatePlan(plan, userProfile, lang = "en") {
     for (const v of violations) allViolations.push({ ...v, day: dayNum });
   });
 
-  for (const v of findCrossDayVarietyViolations(days)) allViolations.push(v);
+  for (const v of runWallOnPlanScope(days)) allViolations.push(v);
 
   return { valid: allViolations.length === 0, violations: allViolations };
 }
 
 // ─── Repair ────────────────────────────────────────────────────────────────
+// Every violation produced BY the Wall registry already carries its own
+// human-readable wallMessage (see each rule's `message()` in WALL_RULES
+// above) — this fallback only exists for the rare violation constructed
+// ad-hoc outside the registry (e.g. /api/regenerate-meal's manually-flagged
+// { code: "ALLERGEN", source: "user", detail: excludeIngredient }, which
+// isn't a registry match, it's a crew member tapping one specific ingredient).
 function describeMealViolation(v) {
+  if (v.wallMessage) return v.wallMessage;
   switch (v.code) {
     case "ALLERGEN":
       return v.source === "user"
@@ -1267,6 +1551,7 @@ function describeMealViolation(v) {
     case "TITLE": return `Title problem: ${v.detail}. Rename it to a short, plain menu-style name (max ${MAX_TITLE_CONTENT_WORDS} content words) that says what the dish IS — never the diet name (that's already shown separately as a tag).`;
     case "ICON": return `${v.detail}. Pick an emoji that matches the meal's actual ingredients and slot.`;
     case "CROSS_DAY_VARIETY": return `${v.detail}. Replace this meal with a genuinely different dish — different hero ingredient AND different title pattern from the other day.`;
+    case "JUDGE_ODD": return `A skeptical human-plausibility review flagged this meal: ${v.detail}. Replace it with something a real person would recognize and want to eat.`;
     case "KITCHEN": return v.detail;
     case "CUSTOMS": return v.detail;
     default: return v.detail;
@@ -1905,7 +2190,7 @@ The reverse mistake is equally wrong: do NOT put a breakfast/brunch-style dish (
 Dinner (and Lunch) must be a substantial, complete main course — protein + a starch/grain/vegetable side, portioned as a full meal — never a single light salad, a cheese/charcuterie plate, or an appetizer-sized dish (e.g. beef carpaccio, prosciutto-wrapped mozzarella, a small tapas plate) standing in as the entire meal.
 A Snack must be snack-scale — a small fraction of the daily calorie target, few components (fruit, nuts, yogurt, a small sandwich, veg + dip) — never a full plated dinner-format main (roast, stew, curry, casserole, risotto).
 TITLES: name the actual dish, not a compliance statement — "Greek Yogurt Parfait with Berries & Granola", not "Mediterranean Greek Yogurt Parfait with Sardines & Olive Oil Drizzle." Max ~6 words. NEVER put the diet name (Mediterranean, Vegan, Keto, Halal, Gluten-Free, etc.) in the title — the diet is already shown separately as a tag.
-Do not repeat the same hero ingredient (e.g. sardines, salmon, chicken) or the same title pattern in the same meal slot on consecutive days — vary proteins and formats across the pairing.
+Every meal must include a "hero_ingredient" field: the single defining main component in one or two words (e.g. "salmon", "oats", "tofu") — never the diet name. Do not repeat the same hero_ingredient or the same title pattern in the same meal slot on consecutive days — vary proteins and formats across the pairing.
 These meal-timing and portion rules apply IDENTICALLY to every day of a multi-day pairing — Day 1 and the LAST day are held to the exact same standard. When reaching for a new/different dish to satisfy the variety requirement below, never let that novelty pull Breakfast into lunch/dinner territory or shrink Dinner down to an appetizer — pick a different full-sized, time-appropriate dish instead.
 The meal "type" field must always be the literal English word "Breakfast", "Lunch", "Dinner", or "Snack" — never translate it — even though every other field must be in ${ctx.langName}.
 Every meal must include a "tip" and an "emoji" field with 2–3 food emoji accurately representing the meal. Every meal must also include an "ingredients" array listing each distinct ingredient by short name (e.g. "eggs", "spinach", "feta cheese") — specific enough for a crew member to spot a personal allergen, not full recipe steps.${ctx.lunchBag ? `\nFor every packable meal (not airplane meals), include a "container" field specifying the exact Tupperware size and shape that fits the crew member's ${ctx.lunchBag} lunch bag — e.g. "500ml rectangular container", "300ml round container with clip lid", "2× 200ml sauce containers". Size containers to fit within the bag limits.` : ""}${ctx.airplaneMealDesc ? `\nThe crew member has told us their airplane meal will include: "${ctx.airplaneMealDesc}". For any meal of type "airplane_food", describe how to complement or adapt this specific meal (e.g. add protein, skip the dessert, supplement with a snack). Plan the rest of the day's meals to balance the nutrients already provided by this airplane meal.` : ""}
@@ -2598,7 +2883,7 @@ app.post("/api/referral/use", async (req, res) => {
 // adding "ingredients" — every previously-cached meal was missing it).
 // Folded into every cache key so old entries become unreachable and get
 // freshly regenerated under the current schema/prompt.
-const CACHE_SCHEMA_VERSION = "v9";
+const CACHE_SCHEMA_VERSION = "v10";
 
 function buildCacheKey(data, ctx, lang) {
   const diets = (Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : [])).filter(Boolean).sort();
@@ -2678,17 +2963,67 @@ async function markDaysSeen(email, dayIds) {
 
 // ─────────────────────────────────────────────────────────────────
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── THE WALL — LAYER 2: JUDGE MODEL (plausibility review) ──────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Runs only once Layer 1 is clean — it's a plausibility/common-sense check
+// for what CAN'T be enumerated as a rule (novel absurdity), never a
+// substitute for any deterministic rule. NEVER the check for allergens, diet
+// compliance, calories, or budget — those stay Layer-1-only, always, and the
+// judge is never consulted for them. Best-effort: if the call itself fails
+// (timeout, malformed response), log it and proceed WITHOUT a judge opinion
+// rather than fail the whole plan on a judge outage — Layer 1 is the actual
+// safety net regardless of whether Layer 2 is available this request.
+const JUDGE_SCHEMA = {
+  type: "object",
+  properties: {
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          meal_index: { type: "integer", description: "0-based index matching the numbered list in the prompt." },
+          verdict: { type: "string", enum: ["ok", "odd"] },
+          reason: { type: "string", description: "One sentence. Required even for 'ok' — briefly say why it's normal." },
+        },
+        required: ["meal_index", "verdict", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["verdicts"],
+  additionalProperties: false,
+};
+
+async function runJudge(meals) {
+  const mealList = meals.map((m, i) => `${i}. [${m.type}] "${m.name}" — ${m.description || ""} (hero ingredient: ${m.hero_ingredient || "unspecified"}, ${m.calories} kcal)`).join("\n");
+  const prompt = `You are reviewing a generated meal plan for aviation crew. For each meal below, answer: would a normal person recognize this as its stated meal type (Breakfast/Lunch/Dinner/Snack) and actually want to eat it at that time of day? Flag anything odd, unappetizing, culturally incoherent, implausible, or that a real person would find strange — this includes food that's technically diet-compliant but wrong for the slot (e.g. a canned fish breakfast), a meal that doesn't match its own stated hero ingredient, or a combination no real menu would ever produce. Be skeptical — you are the last check before a paying customer sees this.
+
+MEALS:
+${mealList}
+
+Return one verdict per meal, in the same order, using its 0-based index above as meal_index.`;
+  try {
+    const result = await runStructured(prompt, JUDGE_SCHEMA, 700, FAST_MODEL);
+    return result.verdicts || [];
+  } catch (e) {
+    console.error(`[judge] call failed, proceeding without a judge opinion this request: ${e.message}`);
+    return [];
+  }
+}
+
 // How many extra validate-then-regenerate passes a single day gets before
 // generation gives up on it entirely (returns null / marks it failed)
-// rather than ever serving a plan that failed validation.
-// Was 2; a production 504 (Vercel's 60s function limit, see vercel.json
-// maxDuration) showed a single day stacking the pre-existing "malformed
-// response, retry once" pass with a validator repair pass — up to 4
-// sequential AI round-trips for one day. Cut to 1 to bound worst-case
-// latency; a day that still fails after its one genuine repair attempt is
-// marked failed (see failedDays) rather than retried further within the
-// same request — better than timing out the whole request.
-const REPAIR_ATTEMPTS = 1;
+// rather than ever serving a plan that failed validation. The Wall spec
+// requires up to 2 repair attempts for REPAIR-severity violations — BLOCK
+// violations (allergens) never reach this loop at all (see generateOneDay:
+// hasBlockingViolation fails immediately, no repair attempt), which removes
+// exactly the worst-case path that caused a prior production 504 (a single
+// day stacking the "malformed response, retry once" pass with a full
+// validator repair pass on an unrecoverable violation). vercel.json's
+// maxDuration was raised alongside this change to give the 2 repair
+// attempts + the Layer-2 judge call room to complete.
+const REPAIR_ATTEMPTS = 2;
 
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   // Tracks whether reservePairingUsage actually consumed a non-premium
@@ -2792,11 +3127,39 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     // reservePairingUsage atomically checks-and-consumes in one DB operation —
     // closes the race where two concurrent requests could both read
     // "allowed" before either had incremented.
-    const [usage, { days: cachedDays }, cachedExtras] = await Promise.all([
+    const [usage, { days: rawCachedDays }, cachedExtras] = await Promise.all([
       reservePairingUsage(email, data.name, req.ip),
       queryCachedDays(email, cacheKey, pairingDays),
       queryExtrasCache(extrasKey),
     ]);
+
+    // A cached plan is still a plan — the Wall runs on READ here too, not
+    // just on write (storeCachedDays only ever stores days that already
+    // passed Layer 1 at write time — see below — but a rule can be ADDED to
+    // WALL_RULES later without a CACHE_SCHEMA_VERSION bump, since no new
+    // required MEAL_SCHEMA field is necessarily involved; the version bump
+    // alone can't catch that). Any cached day failing the CURRENT registry
+    // is dropped here, before the cache-hit/cache-miss branch below decides
+    // anything — a dropped day is simply treated as a cache miss for that
+    // slot and falls through to normal fresh generation like any other gap.
+    // WARN-severity findings (e.g. hero_ingredient_agreement) don't discard
+    // a day — only BLOCK/REPAIR do, same bar as everything else in the Wall.
+    const { tags: cacheRequiredAllergenTags, customAllergyTerm: cacheCustomAllergyTerm } = getUserRequiredAllergenAvoidance(data);
+    const cacheActiveDietTags = reqDiets.filter(d => DIET_PROHIBITED[d] || d === "kosher" || d === "low_carb");
+    const cachedDays = rawCachedDays.filter(d => {
+      const { violations } = validateDay(d.meals, {
+        requiredAllergenTags: cacheRequiredAllergenTags, customAllergyTerm: cacheCustomAllergyTerm,
+        activeDietTags: cacheActiveDietTags, expectedStructure: getExpectedMealStructure(ctx),
+        calorieTarget: ctx.calorieTarget ?? ctx.gainTarget ?? ctx.maintenanceTarget ?? null,
+        calorieTolerance: ctx.maintenanceTarget && !ctx.calorieTarget && !ctx.gainTarget ? 0.15 : 0.10,
+        perDayBudget: ctx.perDayBudget, kitchenList: data.kitchen || [], restrictedBorders: ctx.restrictedBorders,
+      });
+      const blocking = violations.filter(v => v.severity !== "WARN");
+      if (blocking.length === 0) return true;
+      for (const v of blocking) logWallViolation({ ...v, day: null, attempt: 0, source: "cache-read" });
+      console.warn(`[wall] cached day for ${email} failed re-validation on read, discarding (treated as cache miss): ${blocking.map(v => v.ruleId ?? v.code).join(", ")}`);
+      return false;
+    });
 
     if (!usage.allowed) {
       return res.status(403).json({
@@ -2947,13 +3310,62 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
         let { meals, totalCalories } = rescale(raw.meals);
         let violations = validateDay(meals, validateOpts).violations;
+        for (const v of violations) logWallViolation({ ...v, day: overallDayNum, attempt: 0 });
 
-        for (let attempt = 1; attempt <= REPAIR_ATTEMPTS && violations.length > 0; attempt++) {
-          for (const v of violations) {
-            console.warn(`[validator] day=${overallDayNum} attempt=${attempt} FAIL ${v.code} meal="${v.mealName ?? ""}" detail="${v.detail}"`);
+        // BLOCK fails closed immediately — never repair-loops past it. A
+        // missing plan is an inconvenience; an allergen violation is a
+        // medical emergency, so this is checked before anything else runs,
+        // including the judge below.
+        if (hasBlockingViolation(violations)) {
+          for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
+            console.error(`[wall] BLOCK day=${overallDayNum} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}" — refusing to serve, no repair attempted`);
           }
-          const mealLevel = violations.filter(v => v.mealIndex !== undefined);
-          const dayLevel = violations.filter(v => v.mealIndex === undefined);
+          return null;
+        }
+
+        // Layer 2 (judge): only on this FIRST generation, and only once
+        // Layer 1 is already clean (no BLOCK, no REPAIR left) — a plan with
+        // outstanding Layer-1 issues gets those fixed by the loop below
+        // first; the judge reviews structurally-valid content, it doesn't
+        // replace fixing it. One judge call per day, ever, per the cost note
+        // in the Wall spec — repair iterations below are never re-judged.
+        if (violations.length === 0) {
+          const judgeVerdicts = await runJudge(meals);
+          const oddVerdicts = judgeVerdicts.filter(j => j.verdict === "odd" && meals[j.meal_index]);
+          for (const j of oddVerdicts) {
+            logWallViolation({
+              ruleId: "judge_plausibility", severity: "REPAIR", code: "JUDGE_ODD", day: overallDayNum,
+              mealIndex: j.meal_index, mealType: meals[j.meal_index]?.type, mealName: meals[j.meal_index]?.name,
+              detail: j.reason, attempt: 0, source: "layer2",
+            });
+          }
+          if (oddVerdicts.length > 0) {
+            const newMeals = await Promise.all(meals.map(async (meal, i) => {
+              const odd = oddVerdicts.find(j => j.meal_index === i);
+              if (!odd) return meal;
+              const judgeViolation = { code: "JUDGE_ODD", detail: odd.reason, mealType: meal.type, mealName: meal.name };
+              const fixed = await regenerateMealForViolations(meal, [judgeViolation], dayCtx.dietRules, dayCtx.kitchenAccessBlock);
+              return fixed || meal;
+            }));
+            ({ meals, totalCalories } = rescale(newMeals));
+            violations = validateDay(meals, validateOpts).violations;
+            for (const v of violations) logWallViolation({ ...v, day: overallDayNum, attempt: 0, source: "layer2-repair" });
+            if (hasBlockingViolation(violations)) {
+              for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
+                console.error(`[wall] BLOCK (introduced during judge repair) day=${overallDayNum} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}"`);
+              }
+              return null;
+            }
+          }
+        }
+
+        for (let attempt = 1; attempt <= REPAIR_ATTEMPTS && repairableViolations(violations).length > 0; attempt++) {
+          const repairable = repairableViolations(violations);
+          for (const v of repairable) {
+            console.warn(`[validator] day=${overallDayNum} attempt=${attempt} FAIL ${v.ruleId ?? v.code} meal="${v.mealName ?? ""}" detail="${v.detail}"`);
+          }
+          const mealLevel = repairable.filter(v => v.mealIndex !== undefined);
+          const dayLevel = repairable.filter(v => v.mealIndex === undefined);
 
           if (dayLevel.length > 0) {
             // Structural/day-total problems are about the COMBINATION of
@@ -2980,11 +3392,22 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
             ({ meals, totalCalories } = rescale(newMeals));
           }
           violations = validateDay(meals, validateOpts).violations;
+          for (const v of violations) logWallViolation({ ...v, day: overallDayNum, attempt });
+
+          // A repair pass must never accidentally introduce a NEW allergen —
+          // if it does, treat it exactly like a first-pass BLOCK: fail
+          // immediately, no further repair attempted.
+          if (hasBlockingViolation(violations)) {
+            for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
+              console.error(`[wall] BLOCK (introduced during repair) day=${overallDayNum} attempt=${attempt} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}"`);
+            }
+            return null;
+          }
         }
 
-        if (violations.length > 0) {
-          for (const v of violations) {
-            console.error(`[validator] day=${overallDayNum} FAILED after ${REPAIR_ATTEMPTS} repair attempts — refusing to serve. ${v.code} meal="${v.mealName ?? ""}" detail="${v.detail}"`);
+        if (repairableViolations(violations).length > 0) {
+          for (const v of repairableViolations(violations)) {
+            console.error(`[validator] day=${overallDayNum} FAILED after ${REPAIR_ATTEMPTS} repair attempts — refusing to serve. ${v.ruleId ?? v.code} meal="${v.mealName ?? ""}" detail="${v.detail}"`);
           }
           return null;
         }
@@ -3028,18 +3451,19 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
       console.log(`[meal-cache] MISS for ${email}: generated ${missing} day(s), ${failedCount} failed extras=${cachedExtras ? "cache" : "ai"}`);
     }
 
-    // Cross-day variety runs across the WHOLE assembled plan — days generate
-    // independently (parallel, for latency), so a same-slot hero/title repeat
-    // across consecutive days can only be caught here, after assembly. Repair
-    // is targeted (just the specific colliding meal, on the LATER day) rather
-    // than a full day-level regeneration, to keep this bounded and fast.
-    const crossDayViolations = findCrossDayVarietyViolations(days);
+    // Cross-day variety (the Wall's "variety" plan-scope rule) runs across
+    // the WHOLE assembled plan — days generate independently (parallel, for
+    // latency), so a same-slot hero/title repeat across consecutive days can
+    // only be caught here, after assembly. Repair is targeted (just the
+    // specific colliding meal, on the LATER day) rather than a full
+    // day-level regeneration, to keep this bounded and fast.
+    const crossDayViolations = runWallOnPlanScope(days);
     if (crossDayViolations.length > 0) {
       const { tags: requiredAllergenTags, customAllergyTerm } = getUserRequiredAllergenAvoidance(data);
       const rawDietsForRepair = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
       const activeDietTagsForRepair = rawDietsForRepair.filter(d => DIET_PROHIBITED[d] || d === "kosher" || d === "low_carb");
       await Promise.all(crossDayViolations.map(async (v) => {
-        console.warn(`[validator] day=${v.day} CROSS_DAY_VARIETY meal="${v.mealName}" detail="${v.detail}"`);
+        logWallViolation({ ...v, day: v.day, attempt: 0, source: "cross-day" });
         const targetDay = days.find(d => d.day === v.day);
         if (!targetDay || targetDay.failed || !Array.isArray(targetDay.meals)) return;
         const meal = targetDay.meals[v.mealIndex];
@@ -3054,15 +3478,17 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
           return;
         }
-        const stillBad = [
-          ...findMealAllergenViolations(replacement, requiredAllergenTags, customAllergyTerm),
-          ...findMealDietViolations(replacement, activeDietTagsForRepair),
-          findMealSlotContentViolation(replacement),
-          findMealKitchenViolation(replacement, dayKitchen),
-          findMealCustomsViolation(replacement, ctx.restrictedBorders, dayKitchen),
-        ].filter(Boolean);
+        // Full Wall re-check (every meal-scope rule, not just the ones this
+        // specific fix targeted) — a cross-day repair is still a fresh AI
+        // response and must clear the whole registry, not just the rule it
+        // was regenerated for.
+        const stillBad = runWallOnMeal(replacement, {
+          requiredAllergenTags, customAllergyTerm, activeDietTags: activeDietTagsForRepair,
+          calorieTarget: null, kitchenList: dayKitchen, restrictedBorders: ctx.restrictedBorders,
+        });
         if (stillBad.length > 0) {
-          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues, marking day failed: ${JSON.stringify(stillBad)}`);
+          for (const bv of stillBad) logWallViolation({ ...bv, day: v.day, mealName: replacement.name, mealType: replacement.type, attempt: 1, source: "cross-day-repair" });
+          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues, marking day failed: ${JSON.stringify(stillBad.map(sv => sv.detail))}`);
           targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
           return;
         }
@@ -3215,6 +3641,28 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
       meal, [{ code: "ALLERGEN", source: "user", detail: excludeIngredient }], personalNote, ctx.kitchenAccessBlock
     );
     if (!replacement) {
+      return res.status(502).json({ error: "Could not update this meal. Please try again." });
+    }
+
+    // This endpoint's whole purpose is a personal allergen exclusion — the
+    // replacement is fresh AI output and, like every other plan-returning
+    // path, must clear the Wall before a user ever sees it. Not routing this
+    // through validation was a real bypass: the AI's own response was
+    // returned directly with no check that it actually dropped the flagged
+    // ingredient or didn't introduce a new problem while rewriting the meal.
+    const { tags: requiredAllergenTags } = getUserRequiredAllergenAvoidance(data);
+    const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
+    const activeDietTags = rawDiets.filter(d => DIET_PROHIBITED[d] || d === "kosher" || d === "low_carb");
+    const rawKitchen = Array.isArray(data.kitchen) ? data.kitchen : (data.kitchen ? [data.kitchen] : []);
+    const wallViolations = runWallOnMeal(replacement, {
+      requiredAllergenTags, customAllergyTerm: excludeIngredient, activeDietTags,
+      calorieTarget: ctx.calorieTarget ?? ctx.gainTarget ?? ctx.maintenanceTarget ?? null,
+      kitchenList: rawKitchen, restrictedBorders: ctx.restrictedBorders,
+    });
+    const blocking = wallViolations.filter(v => v.severity !== "WARN");
+    if (blocking.length > 0) {
+      for (const v of blocking) logWallViolation({ ...v, day: null, mealType: replacement.type, mealName: replacement.name, attempt: 0, source: "regenerate-meal" });
+      console.error(`[wall] /api/regenerate-meal replacement still failed the Wall for "${meal.name}": ${blocking.map(v => `${v.ruleId ?? v.code}(${v.detail})`).join(", ")}`);
       return res.status(502).json({ error: "Could not update this meal. Please try again." });
     }
     res.json({ meal: replacement });
@@ -4399,5 +4847,8 @@ export {
   getMealHeroCategory, findCrossDayVarietyViolations, titlesShareSignificantPattern,
   computeLegDirection, computeLegForDay, AIRPORT_TIMEZONE, getCognitivePerfRules,
   TRIAL_ENABLED, TRIAL_DAYS, PREMIUM_REQUIRED_MESSAGE,
+  WALL_RULES, runWallOnMeal, runWallOnDayScope, runWallOnPlanScope,
+  hasBlockingViolation, repairableViolations, runJudge, JUDGE_SCHEMA,
+  WALL_VIOLATION_LOG, logWallViolation, DAYS_SCHEMA,
 };
 export default app;
