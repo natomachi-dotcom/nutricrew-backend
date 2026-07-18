@@ -2671,6 +2671,34 @@ function buildCarriedFoodNote(restrictedBorders, lang = "en") {
   return `${crosses} ${countryStrs.join("; ")}.\n\n${t.mustClear}\n${bans.map(b => `• ${b}`).join("\n")}\n\n${t.locallyPurchased}\n\n${t.safeToCarry}`;
 }
 
+// Per-country customs breakdown for display — deterministic, server-computed
+// directly from restrictedBorders (the SAME array the customs_matches_
+// destination Wall rule checks against), never from model prose. This is
+// what guarantees the displayed rules always match what was actually
+// applied to the plan: it's not a description of the rules, it IS the rules.
+// One entry per restricted country this pairing touches, day-labeled the
+// same way buildCarriedFoodNote already labels them, with the country's
+// actual ban list in plain language (BORDER_COUNTRY_RULES.carriedBans).
+function buildCustomsByCountry(restrictedBorders, lang = "en") {
+  const t = CARRIED_NOTE_TEXT[lang] || CARRIED_NOTE_TEXT.en;
+  return (restrictedBorders || []).map(b => {
+    const parts = [];
+    if (b.days.length > 0) parts.push(t.day(b.days));
+    if (b.onReturn) parts.push(t.onReturn);
+    return {
+      id: b.id,
+      name: b.name[lang] || b.name.en,
+      dayLabel: parts.length > 0 ? parts.join("; ") : null,
+      // Raw days/onReturn alongside the formatted dayLabel — lets the client
+      // pin a note to the SPECIFIC day it applies to (e.g. a badge on that
+      // day's plan view), not just show the country breakdown in one place.
+      days: b.days,
+      onReturn: b.onReturn,
+      bans: b.carriedBans.map(ban => ban[lang] || ban.en),
+    };
+  });
+}
+
 function buildExtrasPrompt(data, pairingDays, ctx) {
   const itinerary = ctx.destinations.map((d, i) => `  Day ${i + 1}: ${d}`).join("\n");
   // Carried-food block applies to the grocery list: items you buy at home to pack
@@ -3614,14 +3642,17 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     const extras = await extrasPromise;
 
     // Inject server-computed, deterministic (not model-generated) fields:
-    // the carried-food note, and whether the USA card should show at all —
-    // derived the same way as everything else in ctx.restrictedBorders, so
-    // the client never needs its own copy of a going-to-USA flag to decide.
+    // the carried-food note, whether the USA card should show at all, and
+    // the full per-country customs breakdown for display — all derived the
+    // same way, from the same ctx.restrictedBorders the customs_matches_
+    // destination Wall rule itself checks against, so what's shown can never
+    // drift from what was actually applied to the plan.
     const carriedNote = buildCarriedFoodNote(ctx.restrictedBorders, lang);
     extras.foodRestrictions = {
       ...extras.foodRestrictions,
       ...(carriedNote ? { carried: carriedNote } : {}),
       usaApplies: ctx.restrictedBorders.some(b => b.id === "usa"),
+      byCountry: buildCustomsByCountry(ctx.restrictedBorders, lang),
     };
 
     // Fire-and-forget: doesn't gate anything. The pairing count itself was
@@ -4971,5 +5002,6 @@ export {
   WALL_VIOLATION_LOG, logWallViolation, DAYS_SCHEMA,
   BORDER_COUNTRY_RULES, getCountryForAirport, detectRestrictedBorders,
   getDestinationFoodRules, unionCarriedBans, extractAirportCode,
+  buildCarriedFoodNote, buildCustomsByCountry,
 };
 export default app;
