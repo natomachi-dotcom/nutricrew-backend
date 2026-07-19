@@ -207,7 +207,14 @@ app.use(express.json({ limit: "8mb" }));
 const client = new Anthropic();
 const FAST_MODEL = "claude-haiku-4-5-20251001";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Conditional construction, same pattern as `stripe` below — every call site
+// already checks process.env.RESEND_API_KEY before touching `resend` (see
+// sendPlanEmail, send-otp, contact form, kitchen-select email), so this is
+// safe. Unconditional construction here used to crash the process at
+// startup with no RESEND_API_KEY set ("Missing API key"), which meant the
+// [DEV] OTP-to-console fallback below was actually unreachable in any local
+// dev setup that didn't also have a real Resend key configured.
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const FROM_EMAIL = process.env.FROM_EMAIL || "NutriCrew <crewmealplans@nutricrew.ca>";
 
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
