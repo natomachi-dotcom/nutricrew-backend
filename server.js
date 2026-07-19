@@ -307,11 +307,19 @@ const ALLERGEN_TAGS = [
   "wheat_gluten", "sesame", "mustard", "celery", "lupin", "sulphites",
 ];
 
+// Defined here (rather than down with the rest of the title-validation logic
+// in the TITLES section) because MEAL_SCHEMA's "name" field description
+// needs it at module-load time, before that section runs.
+const MAX_TITLE_CONTENT_WORDS = 6;
+
 const MEAL_SCHEMA = {
   type: "object",
   properties: {
     type: { type: "string", enum: ["Breakfast", "Lunch", "Dinner", "Snack"] },
-    name: { type: "string" },
+    name: {
+      type: "string",
+      description: `Short, plain menu-style dish name — max ${MAX_TITLE_CONTENT_WORDS} content words (connector words like "with"/"and"/"&"/"the" don't count). Say what the dish IS, not the diet it satisfies (that's a separate tag). Pick ONE distinguishing detail, not two — listing a prep style plus two garnishes almost always overflows the limit. BAD (7 words): "Grilled Chicken Breast with Roasted Zucchini & Olive Tapenade". GOOD (4 words): "Grilled Chicken with Zucchini". GOOD (4 words): "Chicken Breast with Olive Tapenade". Drop a word (protein cut detail, a second garnish, a redundant adjective) whenever a name is running long — the full ingredient list is already shown separately, the name doesn't need to enumerate everything.`,
+    },
     description: { type: "string" },
     prep: {
       type: "string",
@@ -1078,7 +1086,8 @@ function findMealPortionScaleViolation(meal, dailyTarget) {
 // Yogurt Parfait with Sardines...") instead of what a menu would say. The
 // diet is already shown as a tag chip elsewhere — the title's only job is to
 // say what the dish IS.
-const MAX_TITLE_CONTENT_WORDS = 6;
+// MAX_TITLE_CONTENT_WORDS is defined earlier, near ALLERGEN_TAGS — MEAL_SCHEMA
+// needs it before this section runs.
 // Connector words don't count toward the length cap — "Greek Yogurt Parfait
 // with Berries & Granola" is 5 content words (Greek/Yogurt/Parfait/Berries/
 // Granola), not 7.
@@ -1712,6 +1721,10 @@ const KITCHEN_ACCESS_RULES = {
   fridge: `fridge: Refrigerator available but NO cooking equipment (no stove, oven, or microwave). Meals MUST be cold/no-cook: pre-made salads, cold wraps, yogurt, cheese, deli meats, fresh fruit, overnight oats, cold-brew etc. "prep" = assemble/portion/slice only. Perishables can be stored safely in the fridge.`,
 };
 
+// Every prep_method value the schema allows — used below to spell out the
+// FULL forbidden list, not just one example of it.
+const ALL_PREP_METHODS = ["no_cook", "microwave", "stove_oven", "airplane_provided"];
+
 function buildKitchenAccessBlock(kitchen) {
   const normalized = Array.isArray(kitchen) ? kitchen : (kitchen ? [kitchen] : []);
   const list = normalized.length ? normalized : ["full_kitchen"];
@@ -1722,6 +1735,19 @@ function buildKitchenAccessBlock(kitchen) {
 
   if (list.length > 1) {
     block += `\nMULTIPLE ACCESS TYPES: for each meal, apply whichever single type fits realistically (e.g. dinner on flying day → airplane_food; ground-day breakfast → hotel/microwave). Never blend constraints across types in one meal.`;
+  }
+
+  // Explicit, deterministic allow/forbid list for the "prep_method" schema
+  // field — derived from the SAME KITCHEN_PREP_METHOD_ALLOW map the
+  // validator checks against, so it can never drift out of sync. Production
+  // logs showed the model reliably avoiding stove_oven on hotel-only days
+  // (the one example named in the general diet-rules footer) but still
+  // reaching for microwave or airplane_provided — neither was ever named as
+  // forbidden, so naming ALL of them, not just one, closes that gap.
+  const allowedMethods = [...new Set(list.flatMap(k => KITCHEN_PREP_METHOD_ALLOW[k] || []))];
+  const forbiddenMethods = ALL_PREP_METHODS.filter(m => !allowedMethods.includes(m));
+  if (allowedMethods.length) {
+    block += `\nprep_method MUST be exactly one of: ${allowedMethods.join(", ")}.${forbiddenMethods.length ? ` NEVER use: ${forbiddenMethods.join(", ")} — none of these are achievable with this kitchen access.` : ""}`;
   }
 
   return block;
@@ -1770,8 +1796,9 @@ function getSingleDietBlock(diet, calorieTarget, data) {
 - MAX 50g total carbs/day across all meals combined. Add "~Xg carbs" tag to every meal.
 - NO bread, pasta, rice, potatoes, sugar, most fruit (berries ≤50g OK), corn, juice, sweetened drinks.
 - YES: all proteins, non-starchy veg (greens, broccoli, cauliflower, zucchini, peppers), cheese, nuts, seeds, avocado, olive oil.
-- Make up calories from protein and fat. Verify total daily carbs ≤50g.
-- Being low-carb is never an excuse to serve a cheese plate, charcuterie board, or cold cured-meat-and-cheese platter as an entire Lunch or Dinner — that's a snack board, not a meal. Build the low-carb main around a cooked protein (steak, chicken, salmon, etc.) plus a cooked non-starchy vegetable side; use cheese/nuts/olives as a garnish or the snack meals, not as the main course itself.`;
+- Make up calories from protein and fat. Verify total daily carbs ≤50g. Before finalizing the day, SUM the carbs across all meals — if the total is even close to 50g, cut a higher-carb item (fruit, a starchy garnish, a sauce with added sugar) rather than shipping it over.
+- Being low-carb is never an excuse to serve a cheese plate, charcuterie board, or cold cured-meat-and-cheese platter as an entire Lunch or Dinner — that's a snack board, not a meal. On a day with COOKING access, build the low-carb main around a cooked protein (steak, chicken, salmon, etc.) plus a cooked non-starchy vegetable side; use cheese/nuts/olives as a garnish or the snack meals, not as the main course itself.
+- On a NO-COOK day (hotel/fridge-only), "cooked protein" isn't achievable — the low-carb main instead needs a COLD, ready-to-eat protein at real portion size: rotisserie/deli chicken, cold cuts, canned tuna or salmon, hard-boiled eggs, a pre-made protein salad (no bread/croutons), or a Greek-yogurt-and-nuts bowl — paired with raw non-starchy veg (cucumber, cherry tomatoes, bell pepper strips, snap peas), not a sandwich or wrap (the bread alone can burn most of the day's 50g budget).`;
     case "dairy_free":
       return `DIET: DAIRY-FREE / MILK ALLERGY — STRICT RULES (milk is one of the most common food-allergy anaphylaxis triggers — treat as zero tolerance, not just a preference):
 - NO dairy: no milk, cheese, butter, cream, yogurt, whey, casein, ghee, or lactose. This includes sheep, goat, and other animal milks, not just cow's milk — cross-reactivity between mammalian milks is common.
@@ -2735,6 +2762,24 @@ app.get("/", (req, res) => {
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
+// DEV/TEST-ONLY: in-memory cache of the last OTP issued per email, populated
+// ONLY when RESEND_API_KEY is unset — the exact same condition that already
+// makes send-otp log the code to the console instead of emailing it (see
+// below). Exposed via GET /api/auth/dev-otp so an automated E2E smoke test
+// can read the real code without parsing process stdout or needing a live
+// inbox. Always 403s in production, where RESEND_API_KEY is always set —
+// this introduces no new information disclosure beyond what already prints
+// to the console in dev mode.
+const DEV_OTP_CACHE = new Map();
+
+app.get("/api/auth/dev-otp", (req, res) => {
+  if (process.env.RESEND_API_KEY) return res.status(403).json({ error: "Not available when email sending is configured." });
+  const email = (req.query.email || "").toLowerCase().trim();
+  const otp = DEV_OTP_CACHE.get(email);
+  if (!otp) return res.status(404).json({ error: "No OTP on file for this email." });
+  res.json({ otp });
+});
+
 app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
   try {
     const { email } = req.body;
@@ -2769,6 +2814,7 @@ app.post("/api/auth/send-otp", otpLimiter, async (req, res) => {
       });
       if (emailResult.error) console.error("OTP email error:", emailResult.error);
     } else {
+      DEV_OTP_CACHE.set(email.toLowerCase().trim(), otp);
       console.log(`[DEV] OTP for ${email}: ${otp}`);
     }
 
@@ -5002,6 +5048,6 @@ export {
   WALL_VIOLATION_LOG, logWallViolation, DAYS_SCHEMA,
   BORDER_COUNTRY_RULES, getCountryForAirport, detectRestrictedBorders,
   getDestinationFoodRules, unionCarriedBans, extractAirportCode,
-  buildCarriedFoodNote, buildCustomsByCountry,
+  buildCarriedFoodNote, buildCustomsByCountry, buildKitchenAccessBlock,
 };
 export default app;

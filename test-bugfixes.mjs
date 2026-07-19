@@ -26,7 +26,7 @@ function baseData(overrides = {}) {
     email: "test@example.com", name: "Test User", gender: "female",
     weight: "70kg", dob: "1996-01-01", position: "cabin",
     diets: ["none"], goals: [], kitchen: ["full_kitchen"],
-    departure: "YYZ", destinations: ["LAX"], going_usa: "no", timezone: "0",
+    departure: "YYZ", destinations: ["LAX"], timezone: "0",
     ...overrides,
   };
 }
@@ -142,6 +142,32 @@ console.log("\n=== generate-bank.js stays in sync ===");
     !!m && m[1] === CACHE_SCHEMA_VERSION,
     `generate-bank.js has ${m?.[1]}, server.js has ${CACHE_SCHEMA_VERSION}`
   );
+}
+
+console.log("\n=== KITCHEN ACCESS prompt names EVERY forbidden prep_method, not just one ===");
+{
+  // Production logs (2026-07-18) showed the model reliably avoiding
+  // stove_oven on hotel-only days (the one example named in the old generic
+  // instruction) but still picking microwave or airplane_provided — neither
+  // was ever named as forbidden, so REPAIR kept firing on kitchen_access
+  // and burning through the repair budget. Fixed by deriving an explicit
+  // allow/forbid list per kitchen combo directly from KITCHEN_PREP_METHOD_ALLOW
+  // (the same map the validator itself checks against).
+  const { buildKitchenAccessBlock } = await import("./server.js");
+
+  const hotelBlock = buildKitchenAccessBlock(["hotel"]);
+  check("hotel-only names no_cook as the sole allowed method", hotelBlock.includes("MUST be exactly one of: no_cook."));
+  check("hotel-only explicitly forbids microwave", /NEVER use:.*microwave/.test(hotelBlock));
+  check("hotel-only explicitly forbids stove_oven", /NEVER use:.*stove_oven/.test(hotelBlock));
+  check("hotel-only explicitly forbids airplane_provided", /NEVER use:.*airplane_provided/.test(hotelBlock));
+
+  const multiBlock = buildKitchenAccessBlock(["hotel", "airplane_food"]);
+  check("hotel+airplane_food allows both no_cook and airplane_provided", /MUST be exactly one of: no_cook, airplane_provided/.test(multiBlock));
+  check("hotel+airplane_food still forbids microwave and stove_oven", /NEVER use: microwave, stove_oven/.test(multiBlock));
+
+  const fullKitchenBlock = buildKitchenAccessBlock(["full_kitchen"]);
+  check("full_kitchen forbids only airplane_provided", /NEVER use: airplane_provided/.test(fullKitchenBlock));
+  check("full_kitchen allows no_cook, microwave, and stove_oven", /MUST be exactly one of: no_cook, microwave, stove_oven/.test(fullKitchenBlock));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
