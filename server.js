@@ -1717,7 +1717,15 @@ function describeMealViolation(v) {
 // Returns null (not the stale meal) on failure, so the caller can tell
 // "still broken" apart from "unchanged" — the repair loop must never
 // silently keep serving a violating meal just because regeneration errored.
-async function regenerateMealForViolations(meal, violations, dietRules, kitchenAccessBlock) {
+// carriedFoodBlock is optional (customs-restricted pairings only) but was
+// missing at every call site until 2026-07-20: fixing an UNRELATED problem
+// (e.g. a cross-day variety repeat) with zero customs context routinely
+// produced a fresh customs violation instead — "Oatmeal with Berries" kept
+// coming back as the swap-in for a repeated Breakfast, because the model
+// regenerating it had no idea fresh berries couldn't cross this pairing's
+// border. The cross-day path in particular gets exactly one shot with no
+// retry, so introducing a brand-new violation there fails the whole day.
+async function regenerateMealForViolations(meal, violations, dietRules, kitchenAccessBlock, carriedFoodBlock = "") {
   const problems = violations.map((v, i) => `${i + 1}. ${describeMealViolation(v)}`).join("\n");
   const prompt = `Revise this ONE meal — it failed automated validation and must be replaced.
 
@@ -1729,7 +1737,7 @@ ${problems}
 ${dietRules}
 
 ${kitchenAccessBlock}
-
+${carriedFoodBlock ? `\n${carriedFoodBlock}\n` : ""}
 Generate a REPLACEMENT ${meal.type} meal that fixes every problem above, still fully complies with the diet and kitchen constraints, and keeps calories close to ${meal.calories} kcal. List EVERY ingredient (nothing omitted, however small) in "ingredients", and make sure "allergens_present" and "diet_tags" accurately reflect the NEW ingredients — do not carry over the old meal's values. Return ONLY the meal JSON.`;
   try {
     const replacement = await runStructured(prompt, MEAL_SCHEMA, 900, FAST_MODEL);
@@ -3444,9 +3452,19 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
     let newDayIds = [];
 
     // Start EXTRAS: use cache if available, otherwise generate with Haiku
+    // 2000 tokens: raised from 1200 (2026-07-20) — summary + grocery list +
+    // foodRestrictions (usa/destination/general prose, each can run long for
+    // multi-country or USA-restricted pairings) routinely filled the old cap
+    // exactly (out=1200 on every single request for a USA-restricted test
+    // scenario, meaning it was truncating every time, not occasionally), so
+    // extractJSON reliably threw a SyntaxError on truncated output. The
+    // rejection is pre-observed via .catch(() => {}) below so it can't crash
+    // the process as an unhandled rejection, but it still surfaced as a
+    // clean 500 "Internal server error" once actually awaited — same root
+    // cause class as the DAYS_SCHEMA cap raised earlier today.
     const extrasPromise = cachedExtras
       ? Promise.resolve(cachedExtras)
-      : runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 1200, FAST_MODEL)
+      : runStructured(buildExtrasPrompt(data, pairingDays, ctx), EXTRAS_SCHEMA, 2000, FAST_MODEL)
           .then(result => { storeExtrasCache(extrasKey, result); return result; });
     // extrasPromise isn't awaited until after day generation + guards run, which can
     // take a while — if it rejects (e.g. truncated JSON from the model) before then,
@@ -3610,7 +3628,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
               const odd = oddVerdicts.find(j => j.meal_index === i);
               if (!odd) return meal;
               const judgeViolation = { code: "JUDGE_ODD", detail: odd.reason, mealType: meal.type, mealName: meal.name };
-              const fixed = await regenerateMealForViolations(meal, [judgeViolation], dayCtx.dietRules, dayCtx.kitchenAccessBlock);
+              const fixed = await regenerateMealForViolations(meal, [judgeViolation], dayCtx.dietRules, dayCtx.kitchenAccessBlock, buildCarriedFoodPromptBlock(dayCtx.restrictedBorders));
               return fixed || meal;
             }));
             ({ meals, totalCalories } = rescale(newMeals));
@@ -3652,7 +3670,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
             }
             const newMeals = await Promise.all(meals.map(async (meal, i) => {
               if (!byIndex.has(i)) return meal;
-              const fixed = await regenerateMealForViolations(meal, byIndex.get(i), dayCtx.dietRules, dayCtx.kitchenAccessBlock);
+              const fixed = await regenerateMealForViolations(meal, byIndex.get(i), dayCtx.dietRules, dayCtx.kitchenAccessBlock, buildCarriedFoodPromptBlock(dayCtx.restrictedBorders));
               return fixed || meal;
             }));
             ({ meals, totalCalories } = rescale(newMeals));
@@ -3757,34 +3775,46 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           ? (data.kitchen_by_day[v.day - 1] || data.kitchen || [])
           : (data.kitchen || []);
         const dayKitchen = Array.isArray(rawKitchen) ? rawKitchen : (rawKitchen ? [rawKitchen] : []);
-        const replacement = await regenerateMealForViolations(meal, [v], ctx.dietRules, buildKitchenAccessBlock(dayKitchen));
-        if (!replacement) {
-          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" failed to regenerate — marking day failed`);
-          targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
-          return;
+        // Retries up to REPAIR_ATTEMPTS, same budget as the main per-day
+        // validation loop — this used to be a single shot with no retry, so
+        // ANY new violation introduced by the swap (customs, kitchen_access,
+        // whatever) failed the whole day immediately with no chance to
+        // correct course. Confirmed live 2026-07-20: fixing a cross-day
+        // variety repeat kept introducing a fresh, DIFFERENT violation each
+        // deploy (fresh berries vs. customs, then a microwave prep_method
+        // vs. hotel/no-kitchen) — a real, one-shot regeneration is simply
+        // not reliable enough to trust without the same retry room every
+        // other repair path already gets.
+        let replacement = null;
+        let currentViolations = [v];
+        let blockingStillBad = [];
+        for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
+          replacement = await regenerateMealForViolations(meal, currentViolations, ctx.dietRules, buildKitchenAccessBlock(dayKitchen), buildCarriedFoodPromptBlock(ctx.restrictedBorders));
+          if (!replacement) break;
+          // Full Wall re-check (every meal-scope rule, not just the ones
+          // this specific fix targeted) — a cross-day repair is still a
+          // fresh AI response and must clear the whole registry, not just
+          // the rule it was regenerated for.
+          const stillBad = runWallOnMeal(replacement, {
+            requiredAllergenTags, customAllergyTerm, activeDietTags: activeDietTagsForRepair,
+            calorieTarget: null, kitchenList: dayKitchen, restrictedBorders: ctx.restrictedBorders,
+          });
+          for (const bv of stillBad) logWallViolation({ ...bv, day: v.day, mealName: replacement.name, mealType: replacement.type, attempt, source: "cross-day-repair" });
+          // WARN-severity findings (hero_ingredient_agreement is currently
+          // the only one) are explicitly documented as never blocking or
+          // failing a day — "a disagreement is a useful signal to review,
+          // not proof the model is wrong" (see WALL_RULES comment). This
+          // check used to fail the whole day on a bare stillBad.length,
+          // ignoring severity — confirmed live 2026-07-20: two separate
+          // days failed purely because the heuristic hero-ingredient bucket
+          // disagreed with a genuinely correct model answer.
+          blockingStillBad = stillBad.filter(sv => sv.severity !== "WARN");
+          if (blockingStillBad.length === 0) break;
+          currentViolations = blockingStillBad;
+          replacement = null;
         }
-        // Full Wall re-check (every meal-scope rule, not just the ones this
-        // specific fix targeted) — a cross-day repair is still a fresh AI
-        // response and must clear the whole registry, not just the rule it
-        // was regenerated for.
-        const stillBad = runWallOnMeal(replacement, {
-          requiredAllergenTags, customAllergyTerm, activeDietTags: activeDietTagsForRepair,
-          calorieTarget: null, kitchenList: dayKitchen, restrictedBorders: ctx.restrictedBorders,
-        });
-        for (const bv of stillBad) logWallViolation({ ...bv, day: v.day, mealName: replacement.name, mealType: replacement.type, attempt: 1, source: "cross-day-repair" });
-        // WARN-severity findings (hero_ingredient_agreement is currently the
-        // only one) are explicitly documented as never blocking or failing a
-        // day — "a disagreement is a useful signal to review, not proof the
-        // model is wrong" (see WALL_RULES comment). This check was failing
-        // the whole day on a bare stillBad.length, ignoring severity —
-        // confirmed live 2026-07-20: two separate days failed purely because
-        // the heuristic hero-ingredient bucket disagreed with a genuinely
-        // correct model answer ("salmon" bucketed as "fish_generic",
-        // "chickpea" bucketed as "beans_lentils"), exactly the case WARN
-        // exists to tolerate.
-        const blockingStillBad = stillBad.filter(sv => sv.severity !== "WARN");
-        if (blockingStillBad.length > 0) {
-          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues, marking day failed: ${JSON.stringify(blockingStillBad.map(sv => sv.detail))}`);
+        if (!replacement) {
+          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues after ${REPAIR_ATTEMPTS} attempts, marking day failed: ${JSON.stringify(blockingStillBad.map(sv => sv.detail))}`);
           targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
           return;
         }
@@ -3976,7 +4006,8 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
     const ctx = buildContext(data, lang, pairingDays);
     const personalNote = `${ctx.dietRules}\n\nPERSONAL ALLERGY: The crew member has personally flagged "${excludeIngredient}" as something they cannot eat, separate from the diet rules above. Do not include it in any form.`;
     const replacement = await regenerateMealForViolations(
-      meal, [{ code: "ALLERGEN", source: "user", detail: excludeIngredient }], personalNote, ctx.kitchenAccessBlock
+      meal, [{ code: "ALLERGEN", source: "user", detail: excludeIngredient }], personalNote, ctx.kitchenAccessBlock,
+      buildCarriedFoodPromptBlock(ctx.restrictedBorders)
     );
     if (!replacement) {
       return res.status(502).json({ error: "Could not update this meal. Please try again." });
