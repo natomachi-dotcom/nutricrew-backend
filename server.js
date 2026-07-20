@@ -3771,9 +3771,20 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           requiredAllergenTags, customAllergyTerm, activeDietTags: activeDietTagsForRepair,
           calorieTarget: null, kitchenList: dayKitchen, restrictedBorders: ctx.restrictedBorders,
         });
-        if (stillBad.length > 0) {
-          for (const bv of stillBad) logWallViolation({ ...bv, day: v.day, mealName: replacement.name, mealType: replacement.type, attempt: 1, source: "cross-day-repair" });
-          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues, marking day failed: ${JSON.stringify(stillBad.map(sv => sv.detail))}`);
+        for (const bv of stillBad) logWallViolation({ ...bv, day: v.day, mealName: replacement.name, mealType: replacement.type, attempt: 1, source: "cross-day-repair" });
+        // WARN-severity findings (hero_ingredient_agreement is currently the
+        // only one) are explicitly documented as never blocking or failing a
+        // day — "a disagreement is a useful signal to review, not proof the
+        // model is wrong" (see WALL_RULES comment). This check was failing
+        // the whole day on a bare stillBad.length, ignoring severity —
+        // confirmed live 2026-07-20: two separate days failed purely because
+        // the heuristic hero-ingredient bucket disagreed with a genuinely
+        // correct model answer ("salmon" bucketed as "fish_generic",
+        // "chickpea" bucketed as "beans_lentils"), exactly the case WARN
+        // exists to tolerate.
+        const blockingStillBad = stillBad.filter(sv => sv.severity !== "WARN");
+        if (blockingStillBad.length > 0) {
+          console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues, marking day failed: ${JSON.stringify(blockingStillBad.map(sv => sv.detail))}`);
           targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
           return;
         }
