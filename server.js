@@ -3194,15 +3194,15 @@ Return one verdict per meal, in the same order, using its 0-based index above as
 // rather than ever serving a plan that failed validation. BLOCK violations
 // (allergens) never reach this loop at all (see generateOneDay:
 // hasBlockingViolation fails immediately, no repair attempt).
-// Cut from 2 to 1 (2026-07-20) as a latency experiment: each attempt is a
-// full sequential Haiku call inside generateOneDay's already-sequential
-// fresh→judge→repair chain (the confirmed driver of the 44s generate-plan
-// timeout complaint), and live prod logs showed cases stacking initial+retry
-// +judge+2 repair attempts = 6 sequential calls for one day. Watch prod
-// failure-rate (day `failed:true` / 503 "Failed to generate meal plan after
-// retries") after this deploys — if days that previously recovered on the
-// 2nd repair attempt now fail outright instead, revert to 2.
-const REPAIR_ATTEMPTS = 1;
+// Was cut from 2 to 1 on 2026-07-20 as a latency experiment, per the plan
+// then: watch prod failure-rate and revert if days that previously
+// recovered on the 2nd repair attempt started failing outright instead.
+// They did — within hours, tight-constraint combos (e.g. a restrictive diet
+// stacked with a tight day budget) that reliably needed both attempts
+// started getting marked failed after just one, surfacing as "Day N
+// couldn't be generated" for users who'd have gotten a clean plan before.
+// Reverted back to 2.
+const REPAIR_ATTEMPTS = 2;
 
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   // Tracks whether reservePairingUsage actually consumed a non-premium
