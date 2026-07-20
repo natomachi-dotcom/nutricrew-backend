@@ -4005,13 +4005,6 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
     const pairingDays = Math.min(Math.max(parseInt(data.pairing_days, 10) || 1, 1), MAX_PAIRING_DAYS);
     const ctx = buildContext(data, lang, pairingDays);
     const personalNote = `${ctx.dietRules}\n\nPERSONAL ALLERGY: The crew member has personally flagged "${excludeIngredient}" as something they cannot eat, separate from the diet rules above. Do not include it in any form.`;
-    const replacement = await regenerateMealForViolations(
-      meal, [{ code: "ALLERGEN", source: "user", detail: excludeIngredient }], personalNote, ctx.kitchenAccessBlock,
-      buildCarriedFoodPromptBlock(ctx.restrictedBorders)
-    );
-    if (!replacement) {
-      return res.status(502).json({ error: "Could not update this meal. Please try again." });
-    }
 
     // This endpoint's whole purpose is a personal allergen exclusion — the
     // replacement is fresh AI output and, like every other plan-returning
@@ -4023,15 +4016,37 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
     const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
     const activeDietTags = rawDiets.filter(d => DIET_PROHIBITED[d] || d === "kosher" || d === "low_carb");
     const rawKitchen = Array.isArray(data.kitchen) ? data.kitchen : (data.kitchen ? [data.kitchen] : []);
-    const wallViolations = runWallOnMeal(replacement, {
-      requiredAllergenTags, customAllergyTerm: excludeIngredient, activeDietTags,
-      calorieTarget: ctx.calorieTarget ?? ctx.gainTarget ?? ctx.maintenanceTarget ?? null,
-      kitchenList: rawKitchen, restrictedBorders: ctx.restrictedBorders,
-    });
-    const blocking = wallViolations.filter(v => v.severity !== "WARN");
-    if (blocking.length > 0) {
-      for (const v of blocking) logWallViolation({ ...v, day: null, mealType: replacement.type, mealName: replacement.name, attempt: 0, source: "regenerate-meal" });
-      console.error(`[wall] /api/regenerate-meal replacement still failed the Wall for "${meal.name}": ${blocking.map(v => `${v.ruleId ?? v.code}(${v.detail})`).join(", ")}`);
+
+    // Retries up to REPAIR_ATTEMPTS, same budget every other repair path
+    // gets — this used to be a single shot with no retry, so a replacement
+    // that fixed the flagged allergen but introduced a DIFFERENT, unrelated
+    // violation (wrong prep_method for the kitchen access, a new allergen,
+    // etc.) failed outright with no new meal ever created. Confirmed live
+    // 2026-07-20: a nut-free replacement came back with prep_method
+    // "microwave" for a hotel/no-kitchen day and the whole request 502'd,
+    // leaving the original (still-allergenic) meal in place.
+    let replacement = null;
+    let currentViolations = [{ code: "ALLERGEN", source: "user", detail: excludeIngredient }];
+    let blocking = [];
+    for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
+      replacement = await regenerateMealForViolations(
+        meal, currentViolations, personalNote, ctx.kitchenAccessBlock,
+        buildCarriedFoodPromptBlock(ctx.restrictedBorders)
+      );
+      if (!replacement) break;
+      const wallViolations = runWallOnMeal(replacement, {
+        requiredAllergenTags, customAllergyTerm: excludeIngredient, activeDietTags,
+        calorieTarget: ctx.calorieTarget ?? ctx.gainTarget ?? ctx.maintenanceTarget ?? null,
+        kitchenList: rawKitchen, restrictedBorders: ctx.restrictedBorders,
+      });
+      for (const v of wallViolations) logWallViolation({ ...v, day: null, mealType: replacement.type, mealName: replacement.name, attempt, source: "regenerate-meal" });
+      blocking = wallViolations.filter(v => v.severity !== "WARN");
+      if (blocking.length === 0) break;
+      currentViolations = blocking;
+      replacement = null;
+    }
+    if (!replacement) {
+      console.error(`[wall] /api/regenerate-meal replacement still failed the Wall for "${meal.name}" after ${REPAIR_ATTEMPTS} attempts: ${blocking.map(v => `${v.ruleId ?? v.code}(${v.detail})`).join(", ")}`);
       return res.status(502).json({ error: "Could not update this meal. Please try again." });
     }
     res.json({ meal: replacement });
