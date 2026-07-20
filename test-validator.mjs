@@ -77,11 +77,68 @@ console.log("\n=== C. Diet compliance ===");
   const halalFail = findMealDietViolations(meal({ ingredients: ing("bacon", "eggs") }), ["halal"]);
   check("halal rejects bacon", halalFail.some(v => v.dietTag === "halal"), JSON.stringify(halalFail));
 
+  const halalPorkFail = findMealDietViolations(meal({ name: "Cured Meat Platter", description: "Traditional pork-cured charcuterie.", ingredients: ing("cured meat") }), ["halal"]);
+  check("halal rejects literal pork mention (no qualifier exempts it)", halalPorkFail.some(v => v.dietTag === "halal"), JSON.stringify(halalPorkFail));
+
+  // Regression: "sausage"/"bacon"/"ham"/"salami"/"pepperoni"/"chorizo" are
+  // ambiguous — all have common non-pork/halal versions — but the bare
+  // words were banned unconditionally, rejecting "Turkey Sausage"/"Halal
+  // Sausage"/"Chicken Sausage" purely for containing "sausage". Confirmed
+  // live 2026-07-20 across two separate test scenarios. pork/lard/
+  // prosciutto/pancetta have no non-pork variant and stay always-banned.
+  const turkeySausagePass = findMealDietViolations(meal({ name: "Turkey Sausage & Eggs", ingredients: ing("turkey sausage", "eggs") }), ["halal"]);
+  check('halal accepts "turkey sausage" (no false positive)', turkeySausagePass.length === 0, JSON.stringify(turkeySausagePass));
+
+  const halalSausagePass = findMealDietViolations(meal({ name: "Halal Beef Sausage Plate", ingredients: ing("halal beef sausage") }), ["halal"]);
+  check('halal accepts "halal beef sausage" (no false positive)', halalSausagePass.length === 0, JSON.stringify(halalSausagePass));
+
+  const bareSausageFail = findMealDietViolations(meal({ name: "Sausage & Eggs", ingredients: ing("sausage", "eggs") }), ["halal"]);
+  check('halal still rejects unqualified "sausage" (ambiguous defaults to pork)', bareSausageFail.some(v => v.dietTag === "halal"), JSON.stringify(bareSausageFail));
+
+  const prosciuttoFail = findMealDietViolations(meal({ name: "Prosciutto Wrap", ingredients: ing("prosciutto") }), ["halal"]);
+  check('halal STILL always rejects "prosciutto" (no non-pork variant)', prosciuttoFail.some(v => v.dietTag === "halal"), JSON.stringify(prosciuttoFail));
+
   const kosherFail = findMealDietViolations(meal({ ingredients: ing("chicken", "cheese sauce") }), ["kosher"]);
   check("kosher rejects meat+dairy combined", kosherFail.some(v => v.detail.includes("meat and dairy")), JSON.stringify(kosherFail));
 
   const gfKeto = findMealDietViolations(meal({ ingredients: ing("almond flour", "eggs") }), ["low_carb"]);
   check("low_carb has no per-meal ingredient ban (checked at day level)", gfKeto.length === 0, JSON.stringify(gfKeto));
+
+  const carnivoreSugarFail = findMealDietViolations(meal({ name: "Sweet Beef Jerky", description: "Cured with cane sugar.", ingredients: ing("beef jerky", "cane sugar") }), ["carnivore"]);
+  check("carnivore rejects genuine sugar", carnivoreSugarFail.some(v => v.dietTag === "carnivore"), JSON.stringify(carnivoreSugarFail));
+
+  const carnivoreOilFail = findMealDietViolations(meal({ name: "Canned Sardines in Olive Oil", ingredients: ing("canned sardines in olive oil") }), ["carnivore"]);
+  check("carnivore rejects olive oil", carnivoreOilFail.some(v => v.dietTag === "carnivore"), JSON.stringify(carnivoreOilFail));
+
+  // Regression: "Sugar-Free Beef Jerky" — a meal explicitly self-labeled to
+  // comply with carnivore's own ban — was tripping the bare "sugar" pattern
+  // on its own self-declaration, mirroring the exact self-label false-
+  // positive class ALLERGEN_SELF_LABEL_QUALIFIER already guards against for
+  // allergens. Confirmed live 2026-07-20: the model wrote exactly the
+  // "sugar-free beef jerky" phrasing the carnivore prompt instructs, and it
+  // got rejected anyway, looping the same violation across repair attempts.
+  const carnivoreSugarFreePass = findMealDietViolations(meal({ name: "Sugar-Free Beef Jerky & Cheddar", ingredients: ing("sugar-free beef jerky", "cheddar cheese") }), ["carnivore"]);
+  check('carnivore accepts self-labeled "sugar-free" jerky (no false positive)', carnivoreSugarFreePass.length === 0, JSON.stringify(carnivoreSugarFreePass));
+
+  const carnivoreUnsweetenedPass = findMealDietViolations(meal({ name: "Unsweetened Dried Beef", ingredients: ing("unsweetened dried beef") }), ["carnivore"]);
+  check('carnivore accepts "unsweetened" phrasing (no false positive)', carnivoreUnsweetenedPass.length === 0, JSON.stringify(carnivoreUnsweetenedPass));
+
+  // Regression: "Canned Tuna Salad with Mayo" — tuna + mayo, zero actual
+  // vegetables — was rejected purely because the word "salad" appeared in
+  // the name. "Tuna/chicken/egg salad" are conventional mayo-based dish
+  // names with no vegetable content; only a genuine green/garden salad
+  // should trip this. Confirmed live 2026-07-20 across two separate
+  // adversarial test runs: the model kept regenerating the same (correct,
+  // compliant) dish and the validator kept rejecting it, exhausting repair
+  // attempts on a false positive.
+  const tunaSaladPass = findMealDietViolations(meal({ name: "Canned Tuna Salad with Mayo", ingredients: ing("canned tuna", "mayonnaise") }), ["carnivore"]);
+  check('carnivore accepts "tuna salad" (no vegetables, no false positive)', tunaSaladPass.length === 0, JSON.stringify(tunaSaladPass));
+
+  const chickenSaladPass = findMealDietViolations(meal({ name: "Chicken Salad Plate", ingredients: ing("chicken", "mayo") }), ["carnivore"]);
+  check('carnivore accepts "chicken salad" (no vegetables, no false positive)', chickenSaladPass.length === 0, JSON.stringify(chickenSaladPass));
+
+  const gardenSaladFail = findMealDietViolations(meal({ name: "Garden Salad with Vinaigrette", ingredients: ing("lettuce", "tomato", "olive oil") }), ["carnivore"]);
+  check("carnivore STILL rejects a genuine garden salad", gardenSaladFail.some(v => v.dietTag === "carnivore"), JSON.stringify(gardenSaladFail));
 }
 
 // ── B. Meal slot / structure ─────────────────────────────────────────────

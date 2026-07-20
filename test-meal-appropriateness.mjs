@@ -119,6 +119,19 @@ console.log("\n=== Normal meals pass every check ===");
   const normalSnack = meal({ type: "Snack", name: "Apple & Almond Butter", ingredients: ing("apple", "almond butter"), calories: 150 });
   check("normal snack passes portion scale", !findMealPortionScaleViolation(normalSnack, 2000));
 
+  // Regression: findMealIconViolation used to also reject Breakfast's fish-
+  // emoji ban on Snack meals, putting it in direct conflict with content this
+  // codebase explicitly allows (DINNER_STYLE_AT_BREAKFAST_PATTERN treats
+  // canned sardines/tuna/salmon as fine for Snack, only banning them at
+  // Breakfast) — a fish-based Snack could never pass repair, since the model
+  // kept proposing the correct fish emoji and this rule kept rejecting it.
+  // Confirmed live 2026-07-20 against real production-style requests.
+  const sardineSnack = meal({ type: "Snack", name: "Canned Sardines in Oil", description: "Whole sardines canned in oil.", ingredients: ing("canned sardines in oil"), emoji: "🐟🥫" });
+  check("fish emoji on a Snack is NOT rejected (sardines/tuna/salmon are a valid Snack)", !findMealIconViolation(sardineSnack));
+
+  const sardineBreakfast = meal({ type: "Breakfast", name: "Sardine Toast", description: "Toast topped with sardines.", ingredients: ing("bread", "canned sardines"), emoji: "🐟🍞" });
+  check("fish emoji on Breakfast is STILL rejected (the original reported bug)", !!findMealIconViolation(sardineBreakfast));
+
   const longTitle = meal({ name: "Grilled Herb-Crusted Chicken Breast with Roasted Seasonal Vegetables and Quinoa" });
   check("overly long title rejected", !!findMealTitleViolation(longTitle));
 

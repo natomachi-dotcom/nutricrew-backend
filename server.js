@@ -819,7 +819,17 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
 // ─── C. DIET COMPLIANCE (ingredient-prohibition diets, non-allergen) ────
 const MEAT_WORDS = /\b(beef|chicken|turkey|lamb|veal|duck|goose|pork|sausages?|bacon|hams?|pastrami|salami|jerky|meat|poultry|prosciutto|pepperoni|chorizo)\b/i;
 const HONEY_GELATIN_WORDS = /\b(honey|gelatine?)\b/i;
-const PORK_WORDS = /\b(pork|bacon|hams?|lard|prosciutto|pancetta|pepperoni|chorizo|salami|sausages?)\b/i;
+// bacon/ham/pepperoni/chorizo/salami/sausage are ambiguous — every one of
+// them has a common, everyday non-pork version (turkey bacon, chicken
+// sausage, beef pepperoni, beef salami) and halal/kosher meal prompts
+// routinely produce exactly those. Only exempt when explicitly qualified by
+// a non-pork species word right before it; "sausage" alone with no
+// qualifier stays banned (ambiguous defaults to pork in most food contexts,
+// so still needs a repair). pork/lard/prosciutto/pancetta have no non-pork
+// variant and are always banned. Confirmed live 2026-07-20: "Turkey
+// Sausage" / "Halal Sausage" / "Chicken Sausage" were all rejected purely
+// for containing the word "sausage", regardless of the explicit qualifier.
+const PORK_WORDS = /\b(pork|lard|prosciutto|pancetta)\b|(?<!(?:turkey|chicken|beef|lamb|veal|duck|goose|halal)[- ])\b(bacon|hams?|pepperoni|chorizo|salami|sausages?)\b/i;
 // Excludes "___ vinegar" compounds (red wine vinegar, sherry vinegar, rice
 // wine vinegar, ...) — vinegar-making converts the alcohol to acetic acid,
 // so it isn't the alcoholic beverage the halal ban is about. Found via
@@ -832,7 +842,14 @@ const LACTOSE_PATTERN = /\b(milk|creams?|soft cheese|ice cream|yogh?urt)\b/i;
 // flag "almond butter" as the banned dairy butter.
 const PALEO_PROHIBITED = /\b(wheat|breads?|pasta|rice|oats|corn|barley|rye|beans?|lentils?|chickpeas?|peanuts?|soy|tofu|milk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|sunflower|seed)\s)butter|cheeses?|yogh?urt|refined sugar|white sugar|brown sugar|corn syrup)\b/i;
 const FODMAP_PROHIBITED = /\b(onions?|garlic|wheat|beans?|lentils?|apples?|pears?|mango(?:es)?|watermelon|honey|high[- ]fructose corn syrup|soft cheese|cashews?|pistachios?)\b/i;
-const CARNIVORE_PLANT_HINT = /\b(vegetables?|fruit|grains?|rice|breads?|pasta|beans?|lentils?|nuts?|seeds?|sugar|vegetable oil|olive oil|potatoes?|salad|greens?)\b/i;
+// "salad" excludes tuna/chicken/egg/ham/salmon salad — common mayo-based
+// dish names with zero actual vegetables (tuna + mayo is fully carnivore-
+// compliant). Confirmed live 2026-07-20: "Canned Tuna Salad with Mayo" (no
+// vegetable ingredient anywhere in the meal) was rejected purely because
+// the word "salad" appeared in the name, looping the same false-positive
+// rejection across every repair attempt since the model correctly kept
+// insisting the dish — genuinely compliant — didn't need to change.
+const CARNIVORE_PLANT_HINT = /\b(vegetables?|fruit|grains?|rice|breads?|pasta|beans?|lentils?|nuts?|seeds?|sugar|vegetable oil|olive oil|potatoes?|greens?)\b|(?<!(?:tuna|chicken|egg|ham|salmon|crab|shrimp)\s)\bsalad\b/i;
 
 // diet checkbox id -> banned-ingredient regex. Deliberately excludes
 // gluten_free/dairy_free/nut_free/egg_free/shellfish_free/soy_free/
@@ -848,6 +865,17 @@ const DIET_PROHIBITED = {
   carnivore: CARNIVORE_PLANT_HINT,
 };
 
+// Same self-label false-positive class as ALLERGEN_SELF_LABEL_QUALIFIER
+// above, for DIET_PROHIBITED: "Sugar-Free Beef Jerky" — a meal explicitly
+// labeled to comply with the diet — was still tripping carnivore's bare
+// "sugar" ban on its own self-declaration. Confirmed live 2026-07-20 that
+// the model, when told exactly to write "sugar-free beef jerky" (per the
+// carnivore diet prompt's own trap-avoidance guidance), got flagged anyway
+// and looped on the same violation across repair attempts.
+const DIET_SELF_LABEL_QUALIFIER = {
+  carnivore: /sugar-free|sugar free|no sugar added|unsweetened/i,
+};
+
 // Kosher's core rule isn't "banned ingredient present" like an allergy — it's
 // "meat and dairy never in the SAME meal", plus the usual no-pork/no-shellfish.
 const KOSHER_DAIRY_WORDS = /\b(cheeses?|milk|creams?|butter|yogh?urt|whey|ghee)\b/i;
@@ -861,7 +889,11 @@ function findMealDietViolations(meal, activeDietTags) {
     const pattern = DIET_PROHIBITED[diet];
     if (!pattern) continue;
     const match = text.match(pattern);
-    if (match) violations.push({ code: "DIET", dietTag: diet, detail: match[0] });
+    if (match) {
+      const qualifier = DIET_SELF_LABEL_QUALIFIER[diet];
+      if (qualifier && qualifier.test(text)) continue;
+      violations.push({ code: "DIET", dietTag: diet, detail: match[0] });
+    }
   }
 
   if (activeDietTags.includes("kosher")) {
@@ -1121,11 +1153,20 @@ function findMealTitleViolation(meal) {
 // the meal's hero WAS a tin of sardines, itself the underlying bug). Once
 // the hero-ingredient check above blocks that content, a mismatched icon
 // mostly can't happen for the same meal — this catches the residual case of
-// a raw-fish/sushi/shellfish-style icon on a Breakfast or Snack even when
-// the ingredients text alone didn't trip the slot-content check.
+// a raw-fish/sushi/shellfish-style icon on a Breakfast even when the
+// ingredients text alone didn't trip the slot-content check.
+// Breakfast-only, NOT Snack: DINNER_STYLE_AT_BREAKFAST_PATTERN above (and the
+// prompt itself, for carnivore/keto/paleo) treats canned sardines/tuna/salmon
+// as a perfectly normal Snack — banning the fish emoji there too put this
+// rule in direct conflict with content the model is explicitly told to
+// generate, so a fish-based Snack could never pass repair: the model kept
+// proposing the (correct) fish emoji, this rule kept rejecting it, on repeat
+// across unrelated production requests until REPAIR_ATTEMPTS ran out and the
+// whole day failed. Confirmed live 2026-07-20 against "Canned Sardines in
+// Oil" / "Canned Salmon with Butter" Snacks failing this exact way.
 const SEAFOOD_ICON_PATTERN = /[🐟🐠🦐🦀🦞🐙🦑🍣🍤]/u;
 function findMealIconViolation(meal) {
-  if (meal.type !== "Breakfast" && meal.type !== "Snack") return null;
+  if (meal.type !== "Breakfast") return null;
   const emoji = meal.emoji || "";
   if (!SEAFOOD_ICON_PATTERN.test(emoji)) return null;
   const text = [meal.name, meal.description].filter(Boolean).join(" ");
@@ -1259,7 +1300,22 @@ const WALL_RULES = [
       const violations = findMealDietViolations(meal, ruleCtx.activeDietTags);
       return { pass: violations.length === 0, violations };
     },
-    message: (v) => `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`,
+    // Two specific carnivore traps get a concrete substitution instruction
+    // instead of the generic message — confirmed live 2026-07-20 that a
+    // prose warning several paragraphs up in the diet rules wasn't reliably
+    // stopping the model from reaching for "beef jerky" (usually sugared)
+    // or oil-packed canned fish again on the VERY NEXT repair attempt for
+    // the SAME meal; naming the exact fix at the point of the violation is
+    // far more directive than a general rule stated once, up front.
+    message: (v) => {
+      if (v.dietTag === "carnivore" && /sugar/i.test(v.detail)) {
+        return `Contains "${v.detail}" which violates the "carnivore" diet rule — retail beef jerky/dried meat almost always has added sugar in the cure. Replace with "sugar-free beef jerky" or "unsweetened dried beef" explicitly, or swap to a different protein entirely (canned meat/fish, cheese, hard-boiled eggs).`;
+      }
+      if (v.dietTag === "carnivore" && /olive oil|vegetable oil|oil\b/i.test(v.detail)) {
+        return `Contains "${v.detail}" which violates the "carnivore" diet rule — canned fish packed in olive/vegetable oil is not carnivore-compliant. Specify fish packed in water (drained) instead, or fish packed in its own oil/broth, or add the fat separately as butter/tallow.`;
+      }
+      return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
+    },
   },
   {
     id: "meal_slot_appropriateness",
@@ -1374,8 +1430,17 @@ const WALL_RULES = [
     check: (meals, ruleCtx) => {
       if (!ruleCtx.perDayBudget) return { pass: true, violations: [] };
       const totalCost = (meals || []).reduce((s, m) => s + computeMealCost(m), 0);
-      if (totalCost <= ruleCtx.perDayBudget) return { pass: true, violations: [] };
-      return { pass: false, violations: [{ code: "BUDGET", detail: `total $${totalCost.toFixed(2)} exceeds day budget $${ruleCtx.perDayBudget.toFixed(2)}` }] };
+      // 10% tolerance, same philosophy as the calorie check just above:
+      // estimated_cost is the model's per-ingredient estimate, not a real
+      // receipt, so a hard $0.01-precision cutoff on an inherently
+      // approximate number was causing real failures — confirmed live
+      // 2026-07-20 that a restrictive diet with no cheap-staple offsets
+      // (e.g. carnivore) can miss a tight budget by a couple dollars even
+      // after repair specifically targets the overage, and a day/whole-
+      // pairing failing outright is a much worse outcome than the plan
+      // costing slightly more than requested.
+      if (totalCost <= ruleCtx.perDayBudget * 1.10) return { pass: true, violations: [] };
+      return { pass: false, violations: [{ code: "BUDGET", detail: `total $${totalCost.toFixed(2)} exceeds day budget $${ruleCtx.perDayBudget.toFixed(2)} (10% tolerance)` }] };
     },
     message: (v) => `${v.detail}. Use more affordable ingredients so the day's total cost fits the budget.`,
   },
@@ -1789,7 +1854,7 @@ function getSingleDietBlock(diet, calorieTarget, data) {
       return `DIET: HALAL — STRICT RULES:
 - NO pork or pork-derived products (no bacon, ham, lard, pork gelatin).
 - NO alcohol in any form (no wine sauces, beer, cooking wine, alcohol-based vanilla — use alcohol-free vanilla).
-- All meat/poultry must be labeled "halal-certified".
+- All meat/poultry must be halal-certified — say so in "description" or "tip" (e.g. "Use halal-certified chicken"), NEVER in "name". The word "Halal" must never appear in the dish title — same rule as every other diet name (see TITLES rule) — "Grilled Halal Chicken" is WRONG, "Grilled Chicken with Lemon" is RIGHT; the halal tag is already shown separately.
 - Seafood is permissible.
 - Add a tip to verify halal certification at restaurants/stores, and a layover tip on finding halal options.`;
     case "kosher":
@@ -1876,7 +1941,8 @@ function getSingleDietBlock(diet, calorieTarget, data) {
 - ZERO plant ingredients: no veg, fruit, grains, legumes, nuts, seeds, sugar, or plant oils.
 - Dairy optional: full-fat only (butter, heavy cream, hard cheese). Add tip that some carnivores exclude dairy.
 - Include an electrolyte tip (bone broth, salt, sugar-free electrolytes) in at least one meal.
-- Grocery produce + pantry categories: empty (carnivore only — no plant items).`;
+- Grocery produce + pantry categories: empty (carnivore only — no plant items).
+- TWO SPECIFIC TRAPS, because the realistic commercial version of these products breaks carnivore-strictness and you will default to it if not told otherwise: canned fish (sardines/tuna/salmon) is normally sold packed in olive oil or vegetable oil — that oil IS a plant ingredient and violates this diet, so specify "packed in water" or "packed in olive oil, drained" only if you then add "drained, oil discarded" (or use fish packed in its own oil/broth); and retail beef jerky almost always has added sugar in the cure — you must specify "sugar-free beef jerky" or "unsweetened dried beef" explicitly, never just "beef jerky".`;
     case "calorie_deficit":
       return `DIET: CALORIE DEFICIT — see CALORIE DEFICIT GOAL below for daily kcal target.
 - No food-type restrictions. Prioritize high-protein, high-fiber, high-volume, low-calorie-density foods for satiety.${calorieTarget ? `\n- Daily target: ${calorieTarget} kcal — meal calories must sum to ±50 kcal of this.` : ""}`;
@@ -2202,7 +2268,20 @@ function buildContext(data, lang, pairingDays) {
     ? `$${data.budget_amount} per ${data.budget_type === "total" ? `trip (~$${perDayBudget.toFixed(2)}/day across ${pairingDays} days)` : "day"}`
     : "open (no specific limit)";
   const budgetLevel = !hasBudget ? "none" : perDayBudget > 50 ? "high" : perDayBudget > 20 ? "medium" : "low";
-  const budgetGuidance = BUDGET_GUIDANCE[budgetLevel];
+  // BUDGET_GUIDANCE.low/medium lean on "pantry staples" (rice, beans, pasta,
+  // lentils) to offset pricier proteins — that offset doesn't exist for
+  // carnivore (zero plant items allowed by definition), so every calorie has
+  // to come from animal protein, which is inherently costlier per-calorie.
+  // Without this, the model has no signal that $30/day carnivore needs
+  // active steering toward cheap proteins (eggs, whole chicken, ground beef,
+  // canned tuna/chicken in water, liver) and away from pricier ones (steak,
+  // salmon, sardines, specialty cheese) — confirmed live 2026-07-20: a
+  // carnivore day repeatedly landed $32-36 against a $30 budget even after
+  // repair attempts specifically flagging the overage.
+  const carnivoreBudgetNote = rawDiets.includes("carnivore") && (budgetLevel === "low" || budgetLevel === "medium")
+    ? ` Carnivore has NO plant-based staples to offset cost with — every calorie must come from animal protein. Build the day mainly around cheap proteins (eggs, whole chicken/thighs/drumsticks, ground beef, canned tuna or chicken packed in water, beef liver) and use pricier items (steak, salmon, sardines, specialty/aged cheese) sparingly, at most once across the whole day.`
+    : "";
+  const budgetGuidance = BUDGET_GUIDANCE[budgetLevel] + carnivoreBudgetNote;
 
   const kitchenAccessBlock = buildKitchenAccessBlock(data.kitchen);
   const dietRules = getDietRules(rawDiets, calorieTarget, data);
@@ -3439,12 +3518,20 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         dayCtx.legDirection = dayLeg?.direction || null;
         dayCtx.legHours = dayLeg?.hours || 0;
 
-        // 4200 tokens: the richer per-meal schema (structured ingredients,
+        // 6000 tokens: the richer per-meal schema (structured ingredients,
         // allergens_present, diet_tags, prep_method) plus verbose multi-country
         // customs tips need more room than the old flat-string schema did.
+        // Raised from 4200 (2026-07-20): "Day N returned only 1 meals" was the
+        // single most frequent production error over the prior 7 days (28
+        // occurrences) — a day with richer-than-usual content (long diet
+        // combos, multi-country customs, verbose tips) fills 5 meals'-worth of
+        // structured fields and hits the token cap mid-generation, silently
+        // truncating the response to whatever meal was in progress. This is a
+        // cap, not a fixed spend — raising it costs nothing on the (common)
+        // cases that already fit in 4200.
         const requestFreshDay = () => runStructured(
           buildAllDaysPrompt(dayData, 1, dayCtx, overallDayNum),
-          DAYS_SCHEMA, 4200, FAST_MODEL
+          DAYS_SCHEMA, 6000, FAST_MODEL
         ).then(r => {
           const meals = r?.days?.[0]?.meals;
           if (!meals || meals.length < 3) {
@@ -3690,9 +3777,43 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
           return;
         }
+        // crossDayViolations can name multiple violations on the SAME day
+        // (different mealIndex), all running concurrently in this
+        // Promise.all — if a sibling violation for this day already failed
+        // it (targetDay.meals set to null above) while this branch's own
+        // regeneration succeeded, targetDay.meals is no longer an array by
+        // the time we get here. Crashed the whole request with "Cannot set
+        // properties of null" before this guard — confirmed live 2026-07-20
+        // on a Mediterranean/dairy_free/shellfish_free plan. The day is
+        // already correctly marked failed; nothing more to do.
+        if (!Array.isArray(targetDay.meals)) return;
         targetDay.meals[v.mealIndex] = { ...replacement, type: meal.type };
         targetDay.totalCalories = targetDay.meals.reduce((s, m) => s + (m.calories || 0), 0);
       }));
+
+      // The swap above only re-checks MEAL-scope rules on the replacement
+      // (runWallOnMeal) — a day that already passed its DAY-scope budget
+      // check earlier can go back over budget here, silently, since nothing
+      // re-verifies the day total after a meal-level swap driven by an
+      // unrelated cross-day violation (e.g. a variety repeat). Confirmed
+      // live 2026-07-20: a day that validated under budget got a Breakfast
+      // swapped for a cross-day "hero ingredient repeats" fix, and the
+      // swap's pricier replacement pushed the day 50%+ over budget with no
+      // rejection. Re-run just the budget rule on every day this pass
+      // touched; mark it failed (same bar as the main validation loop) if
+      // the swap pushed it over.
+      const budgetRule = WALL_RULES.find(r => r.id === "budget");
+      if (budgetRule && ctx.perDayBudget) {
+        for (const v of crossDayViolations) {
+          const targetDay = days.find(d => d.day === v.day);
+          if (!targetDay || targetDay.failed || !Array.isArray(targetDay.meals)) continue;
+          const { violations } = budgetRule.check(targetDay.meals, { perDayBudget: ctx.perDayBudget });
+          if (violations.length > 0) {
+            console.error(`[validator] day=${v.day} over budget after cross-day repair swap, marking day failed: ${violations[0].detail}`);
+            targetDay.failed = true; targetDay.meals = null; targetDay.totalCalories = null;
+          }
+        }
+      }
     }
 
     const extras = await extrasPromise;
