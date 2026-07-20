@@ -163,7 +163,8 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
 });
 
 // Lightweight keep-warm endpoint — UptimeRobot / cron-job.org should ping
-// this every 5 min to prevent Render free-tier cold starts.
+// this every 5 min to keep the Vercel function instance warm (Fluid Compute
+// reuses instances across requests, but an idle one still eventually recycles).
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // Lets the frontend mirror the trial feature flag instead of hardcoding it,
@@ -3190,16 +3191,18 @@ Return one verdict per meal, in the same order, using its 0-based index above as
 
 // How many extra validate-then-regenerate passes a single day gets before
 // generation gives up on it entirely (returns null / marks it failed)
-// rather than ever serving a plan that failed validation. The Wall spec
-// requires up to 2 repair attempts for REPAIR-severity violations — BLOCK
-// violations (allergens) never reach this loop at all (see generateOneDay:
-// hasBlockingViolation fails immediately, no repair attempt), which removes
-// exactly the worst-case path that caused a prior production 504 (a single
-// day stacking the "malformed response, retry once" pass with a full
-// validator repair pass on an unrecoverable violation). vercel.json's
-// maxDuration was raised alongside this change to give the 2 repair
-// attempts + the Layer-2 judge call room to complete.
-const REPAIR_ATTEMPTS = 2;
+// rather than ever serving a plan that failed validation. BLOCK violations
+// (allergens) never reach this loop at all (see generateOneDay:
+// hasBlockingViolation fails immediately, no repair attempt).
+// Cut from 2 to 1 (2026-07-20) as a latency experiment: each attempt is a
+// full sequential Haiku call inside generateOneDay's already-sequential
+// fresh→judge→repair chain (the confirmed driver of the 44s generate-plan
+// timeout complaint), and live prod logs showed cases stacking initial+retry
+// +judge+2 repair attempts = 6 sequential calls for one day. Watch prod
+// failure-rate (day `failed:true` / 503 "Failed to generate meal plan after
+// retries") after this deploys — if days that previously recovered on the
+// 2nd repair attempt now fail outright instead, revert to 2.
+const REPAIR_ATTEMPTS = 1;
 
 app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   // Tracks whether reservePairingUsage actually consumed a non-premium
