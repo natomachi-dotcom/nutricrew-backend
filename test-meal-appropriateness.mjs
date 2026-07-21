@@ -11,7 +11,7 @@ const {
   validatePlan, findMealSlotContentViolation, findMealPortionScaleViolation,
   findMealTitleViolation, findMealIconViolation, getMealHeroCategory,
   findCrossDayVarietyViolations, titlesShareSignificantPattern,
-  findMealAllergenViolations, ALLERGEN_DERIVATIVES,
+  findMealAllergenViolations, ALLERGEN_DERIVATIVES, deterministicTitleFix,
 } = await import("./server.js");
 
 let passed = 0;
@@ -137,6 +137,38 @@ console.log("\n=== Normal meals pass every check ===");
 
   const goodLengthTitle = meal({ name: "Greek Yogurt Parfait with Berries & Granola" });
   check('user\'s own example title ("Greek Yogurt Parfait with Berries & Granola") passes length check', !findMealTitleViolation(goodLengthTitle));
+
+  // Regression: told only "don't name the diet," the model reliably swapped
+  // ONE diet-name violation for ANOTHER instead of dropping the qualifier
+  // entirely — "...Gluten-Free Toast" -> repair -> "...Dairy-Free Toast" ->
+  // repair -> back to "...Gluten-Free Toast", exhausting REPAIR_ATTEMPTS in
+  // a loop that never converges. Confirmed live 2026-07-20 across 2 of 3
+  // adversarial test runs. findMealTitleViolation now computes the exact
+  // corrected name (diet term stripped) so the repair message can hand it
+  // over directly instead of leaving the model to guess.
+  const dietNameTitle = meal({ name: "Scrambled Eggs with Gluten-Free Toast" });
+  const dietNameViolation = findMealTitleViolation(dietNameTitle);
+  check("diet name in title is still rejected", !!dietNameViolation, JSON.stringify(dietNameViolation));
+  check('suggestedName strips the diet qualifier, not just flags it', dietNameViolation?.suggestedName === "Scrambled Eggs with Toast", JSON.stringify(dietNameViolation));
+
+  const dairyFreeTitle = meal({ name: "Scrambled Eggs with Dairy-Free Toast" });
+  const dairyFreeViolation = findMealTitleViolation(dairyFreeTitle);
+  check('suggestedName works for a DIFFERENT diet name too (not hardcoded to gluten-free)', dairyFreeViolation?.suggestedName === "Scrambled Eggs with Toast", JSON.stringify(dairyFreeViolation));
+
+  // Regression: even with the directive repair message above, live
+  // verification (2026-07-20, hotel/no-kitchen + gluten-free) found the
+  // model STILL failing to comply and exhausting REPAIR_ATTEMPTS on a
+  // cross-day repair — "Tuna Salad with Gluten-Free Crackers" survived 2
+  // full regeneration attempts. deterministicTitleFix applies the known-
+  // correct name directly instead of gambling another model round-trip on
+  // it, when title_quality is the ONLY remaining problem.
+  const titleOnlyViolation = { ruleId: "title_quality", suggestedName: "Tuna Salad with Crackers" };
+  const fixed = deterministicTitleFix({ name: "Tuna Salad with Gluten-Free Crackers", calories: 400 }, [titleOnlyViolation]);
+  check("deterministicTitleFix applies the suggestedName when title is the only problem", fixed?.name === "Tuna Salad with Crackers", JSON.stringify(fixed));
+
+  const otherViolation = { ruleId: "kitchen_access", detail: "wrong prep_method" };
+  const notFixed = deterministicTitleFix({ name: "Tuna Salad with Gluten-Free Crackers" }, [titleOnlyViolation, otherViolation]);
+  check("deterministicTitleFix declines when OTHER violations are also present", notFixed === null, JSON.stringify(notFixed));
 }
 
 // ── Hero classification + title-pattern matching ──────────────────────────

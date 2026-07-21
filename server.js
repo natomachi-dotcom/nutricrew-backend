@@ -326,7 +326,8 @@ const MEAL_SCHEMA = {
     type: { type: "string", enum: ["Breakfast", "Lunch", "Dinner", "Snack"] },
     name: {
       type: "string",
-      description: `Short, plain menu-style dish name — max ${MAX_TITLE_CONTENT_WORDS} content words (connector words like "with"/"and"/"&"/"the" don't count). Say what the dish IS, not the diet it satisfies (that's a separate tag). Pick ONE distinguishing detail, not two — listing a prep style plus two garnishes almost always overflows the limit. BAD (7 words): "Grilled Chicken Breast with Roasted Zucchini & Olive Tapenade". GOOD (4 words): "Grilled Chicken with Zucchini". GOOD (4 words): "Chicken Breast with Olive Tapenade". Drop a word (protein cut detail, a second garnish, a redundant adjective) whenever a name is running long — the full ingredient list is already shown separately, the name doesn't need to enumerate everything.`,
+      description: `Short, plain menu-style dish name — max ${MAX_TITLE_CONTENT_WORDS} content words (connector words like "with"/"and"/"&"/"the" don't count). Say what the dish IS, not the diet it satisfies (that's a separate tag). Pick ONE distinguishing detail, not two — listing a prep style plus two garnishes almost always overflows the limit. BAD (7 words): "Grilled Chicken Breast with Roasted Zucchini & Olive Tapenade". GOOD (4 words): "Grilled Chicken with Zucchini". GOOD (4 words): "Chicken Breast with Olive Tapenade". Drop a word (protein cut detail, a second garnish, a redundant adjective) whenever a name is running long — the full ingredient list is already shown separately, the name doesn't need to enumerate everything.
+NEVER put ANY diet/allergy qualifier in the name — not the current diet, and not a DIFFERENT one either (a common mistake: renaming "Gluten-Free Toast" to "Dairy-Free Toast" still fails, because the fix isn't to swap qualifiers, it's to drop them entirely). BAD: "Scrambled Eggs with Gluten-Free Toast". GOOD (4 words): "Scrambled Eggs with Toast". The bread being gluten-free is already covered by the diet tag — the name only needs to say it's toast.`,
     },
     description: { type: "string" },
     prep: {
@@ -706,7 +707,15 @@ const ALLERGEN_DERIVATIVES = {
   fish: /\b(fish|anchov(?:y|ies)|fish sauce|worcestershire(?: sauce)?|bonito|dashi|salmon|tuna|cod|tilapia|sardines?|surimi|imitation crab)\b/i,
   shellfish: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|crawfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|shrimp paste)\b/i,
   soy: /\b(soy|soya|soybeans?|edamame|tofu|tempeh|miso|soy sauce|tamari|soy milk|soy lecithin|textured vegetable protein|TVP|natto)\b/i,
-  wheat_gluten: /\b(wheat|flour|breads?|breadcrumbs?|panko|pasta|noodles?|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|crackers?|tortillas?|soy sauce)\b/i,
+  // noodles/crackers/tortillas exclude a "corn"/"rice" qualifier right
+  // before them — those are genuinely, factually not wheat-based (corn
+  // tortillas, rice noodles, rice crackers are common everyday gluten-free
+  // staples), unlike bread/pasta/flour which have no such common non-wheat
+  // default. Confirmed live 2026-07-20: "corn tortilla" was BLOCKed as a
+  // wheat_gluten allergen for a gluten-free user with zero repair chance
+  // (BLOCK severity never gets repaired) — a false positive on a dish that
+  // was correctly, safely gluten-free to begin with.
+  wheat_gluten: /\b(wheat|flour|breads?|breadcrumbs?|panko|pasta|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|soy sauce)\b|(?<!(?:corn|rice)[- ])\b(noodles?|crackers?|tortillas?)\b/i,
   sesame: /\b(sesame|tahini|halva|za'?\s?atar|benne|gomashio|hummus|baba ganoush)\b/i,
   mustard: /\b(mustard|dijon)\b/i,
   celery: /\b(celery|celeriac)\b/i,
@@ -730,14 +739,18 @@ const USER_ALLERGY_TO_TAGS = {
   sesame_free: ["sesame"],
 };
 
-// Free-text self-compliance phrases (e.g. "gluten-free tamari") that would
-// otherwise trip a bare keyword match against the meal's OWN advisory prose.
-// Only applied to the name/description/tip scan — ingredients and the
-// model's own allergens_present are discrete data, not prose, so this
-// false-positive mode doesn't apply there.
+// Self-compliance phrases (e.g. "gluten-free tamari") that would otherwise
+// trip a bare keyword match — checked against ingredient NAMES (discrete
+// data) as well as the free-text name/description/tip scan.
+// wheat_gluten additionally tolerates underscore/space separators (the model
+// sometimes writes "gluten_free bread" instead of "gluten-free bread") and a
+// "no ... wheat" negation window (e.g. "almond butter, no added sugar or
+// wheat") — confirmed live 2026-07-20: both variants were tripping a
+// zero-repair BLOCK on ingredients that were actually, correctly safe.
 const ALLERGEN_SELF_LABEL_QUALIFIER = {
   peanuts: /nut-free/i, tree_nuts: /nut-free/i, milk: /dairy-free|milk-free|lactose-free|plant-based/i,
-  eggs: /egg-free/i, soy: /soy-free/i, wheat_gluten: /gluten-free|wheat-free/i,
+  eggs: /egg-free/i, soy: /soy-free/i,
+  wheat_gluten: /gluten[-_ ]free|wheat[-_ ]free|\bno\b(?:(?!\.).){0,40}\bwheat\b/i,
   sesame: /sesame-free|tahini-free/i, shellfish: /shellfish-free/i, fish: /fish-free/i,
 };
 
@@ -768,24 +781,35 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
   const selfReported = new Set(meal.allergens_present || []);
 
   for (const tag of requiredTags) {
-    if (selfReported.has(tag)) {
-      violations.push({ code: "ALLERGEN", tag, source: "self_report", detail: `model self-reported allergens_present includes "${tag}"` });
-      continue;
-    }
     const pattern = ALLERGEN_DERIVATIVES[tag];
-    if (!pattern) continue;
     const qualifier = ALLERGEN_SELF_LABEL_QUALIFIER[tag];
     // Verification found "gluten-free flour" / "gluten-free rice crackers" as
     // discrete ingredient NAMES still tripping the wheat_gluten ban — the
     // qualifier exemption below only ever ran against the free-text scan, not
     // against the ingredient string itself, even though the qualifying phrase
     // was right there in the same ingredient name.
-    const patternMatches = ingredientNames.filter(n => pattern.test(n));
+    const patternMatches = pattern ? ingredientNames.filter(n => pattern.test(n)) : [];
     const ingHit = patternMatches.find(n => !(qualifier && qualifier.test(n)));
     if (ingHit) {
       violations.push({ code: "ALLERGEN", tag, source: "ingredient", detail: ingHit });
       continue;
     }
+    if (selfReported.has(tag)) {
+      // Live verification (2026-07-20) found the model reliably self-reporting
+      // a tag its OWN ingredient list already clears — e.g. allergens_present
+      // includes "wheat_gluten" while the only matching ingredient is
+      // "gluten-free bread"/"gluten-free tortilla". This was the single
+      // dominant cause of "Day X couldn't be generated": BLOCK severity never
+      // gets a repair chance, so one careless self-report tag killed the
+      // whole day outright. Only trust the self-report when the ingredient
+      // list gives it no qualified explanation to contradict — that's still
+      // how a genuinely hidden/derivative allergen (e.g. Worcestershire ->
+      // fish, not spelled out as a discrete ingredient) keeps getting caught.
+      if (patternMatches.length > 0) continue;
+      violations.push({ code: "ALLERGEN", tag, source: "self_report", detail: `model self-reported allergens_present includes "${tag}"` });
+      continue;
+    }
+    if (!pattern) continue;
     // Only run the free-text scan as an INDEPENDENT check when the ingredient
     // list said nothing about this pattern at all. If it did (and every match
     // was self-qualified, e.g. "gluten-free rice crackers"), a bare restatement
@@ -935,8 +959,13 @@ const DINNER_STYLE_AT_BREAKFAST_PATTERN = /\b(shawarma|kebabs?|curr(?:y|ies)|sti
 const BREAKFAST_SOUP_EXEMPT_PATTERN = /congee/i;
 const BREAKFAST_STYLE_AT_DINNER_PATTERN = /\b(pancakes?|waffles?|cereal|granola bowl|oatmeal|overnight oats|porridge|bagel (?:with|and) (?:cream cheese|lox)|smoothie bowl|french toast)\b/i;
 // Dessert standing in as the ENTIRE meal (not a side/snack) isn't a lunch
-// or dinner, regardless of calories/macros.
-const DESSERT_AS_MEAL_PATTERN = /\b(cakes?|pies?|ice cream|cookies?|brownies?|cupcakes?)\b/i;
+// or dinner, regardless of calories/macros. "cakes" excludes a "rice"
+// qualifier right before it — rice cakes are a common savory snack/side
+// (e.g. "Tuna Salad with Rice Cakes"), not a dessert. Confirmed live
+// 2026-07-20: this was a recurring cross-day-repair failure that never
+// converged because the model kept reaching for rice cakes as a plain,
+// GF-safe side and the bare "cakes" match rejected it every time.
+const DESSERT_AS_MEAL_PATTERN = /\b(pies?|ice cream|cookies?|brownies?|cupcakes?)\b|(?<!rice[- ])\bcakes?\b/i;
 // A "snack" that's actually a full dinner-format plated main defeats the
 // point of the slot — this is the inverse problem of the appetizer-as-
 // dinner check above (there, small-plate content in a main-meal slot is
@@ -1143,7 +1172,21 @@ function findMealTitleViolation(meal) {
   }
   const dietMatch = name.match(DIET_NAME_IN_TITLE_PATTERN);
   if (dietMatch) {
-    return { code: "TITLE", detail: `"${name}" names the diet ("${dietMatch[0]}") — the diet is already shown as a tag, the title should just say what the dish is` };
+    // Confirmed live 2026-07-20: told only "don't name the diet," the model
+    // reliably swapped ONE diet-name violation for ANOTHER instead of
+    // dropping the qualifier — "Scrambled Eggs with Gluten-Free Toast" ->
+    // repair -> "Scrambled Eggs with Dairy-Free Toast" -> repair (still
+    // violates) -> back to "...Gluten-Free Toast", exhausting
+    // REPAIR_ATTEMPTS in a loop that never converges. Computing and handing
+    // over the EXACT corrected string (diet term stripped, whitespace
+    // collapsed) removes the guessing entirely, same fix class as the
+    // 6-word-limit BAD/GOOD examples below.
+    const suggestedName = name.replace(dietMatch[0], "").replace(/\s{2,}/g, " ").trim();
+    return {
+      code: "TITLE",
+      detail: `"${name}" names the diet ("${dietMatch[0]}") — the diet is already shown as a tag, the title should just say what the dish is`,
+      suggestedName,
+    };
   }
   return null;
 }
@@ -1192,7 +1235,11 @@ function findMealKitchenViolation(meal, kitchenList) {
   const allowedAcrossDay = new Set(list.flatMap(k => KITCHEN_PREP_METHOD_ALLOW[k] || []));
   if (allowedAcrossDay.size === 0) return null;
   if (!allowedAcrossDay.has(meal.prep_method)) {
-    return { code: "KITCHEN", detail: `prep_method "${meal.prep_method}" isn't achievable with kitchen access [${list.join(", ")}]` };
+    return {
+      code: "KITCHEN",
+      detail: `prep_method "${meal.prep_method}" isn't achievable with kitchen access [${list.join(", ")}]`,
+      allowedMethods: [...allowedAcrossDay],
+    };
   }
   return null;
 }
@@ -1345,7 +1392,9 @@ const WALL_RULES = [
       const v = findMealTitleViolation(meal);
       return { pass: !v, violations: v ? [v] : [] };
     },
-    message: (v) => `Title problem: ${v.detail}. Rename it to a short, plain menu-style name (max ${MAX_TITLE_CONTENT_WORDS} content words) that says what the dish IS — never the diet name (that's already shown separately as a tag).`,
+    message: (v) => v.suggestedName
+      ? `Title problem: ${v.detail}. Use exactly this corrected name: "${v.suggestedName}" — do NOT swap in a different diet name (e.g. "Dairy-Free" instead of "Gluten-Free"); drop the diet qualifier entirely, since it's already shown separately as a tag.`
+      : `Title problem: ${v.detail}. Rename it to a short, plain menu-style name (max ${MAX_TITLE_CONTENT_WORDS} content words) that says what the dish IS — never the diet name (that's already shown separately as a tag).`,
   },
   {
     id: "icon_match",
@@ -1365,7 +1414,13 @@ const WALL_RULES = [
       const v = findMealKitchenViolation(meal, ruleCtx.kitchenList);
       return { pass: !v, violations: v ? [v] : [] };
     },
-    message: (v) => v.detail,
+    // Live verification (2026-07-20) found kitchen_access repairs failing
+    // repeatedly on hotel/no-kitchen days — the bare v.detail only restates
+    // WHAT's wrong (wrong prep_method), unlike the initial-generation prompt
+    // which always names the exact allowed methods (see buildKitchenAccessBlock).
+    // Same fix class as title_quality's suggestedName: hand over the exact
+    // allowed set instead of leaving the model to guess a replacement.
+    message: (v) => `${v.detail}. Rebuild this meal (different dish if needed) with prep_method set to exactly one of: ${v.allowedMethods.join(", ")} — no other value is achievable with this kitchen access.`,
   },
   {
     id: "customs_carried_food",
@@ -1702,11 +1757,15 @@ function describeMealViolation(v) {
     case "DIET": return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
     case "MEAL_SLOT_CONTENT": return `${v.detail} — a normal person wouldn't recognize this as ${v.mealType} and eat it at that time of day. Replace it with a genuinely typical ${v.mealType} dish. If a protein/macro target is hard to hit with ${v.mealType}-appropriate foods, that's fine — the DAILY total across all meals is what matters, not this one meal in isolation.`;
     case "PORTION_SCALE": return `${v.detail}. Rebuild this ${v.mealType} at the right scale for its slot.`;
-    case "TITLE": return `Title problem: ${v.detail}. Rename it to a short, plain menu-style name (max ${MAX_TITLE_CONTENT_WORDS} content words) that says what the dish IS — never the diet name (that's already shown separately as a tag).`;
+    case "TITLE": return v.suggestedName
+      ? `Title problem: ${v.detail}. Use exactly this corrected name: "${v.suggestedName}" — do NOT swap in a different diet name; drop the diet qualifier entirely, since it's already shown separately as a tag.`
+      : `Title problem: ${v.detail}. Rename it to a short, plain menu-style name (max ${MAX_TITLE_CONTENT_WORDS} content words) that says what the dish IS — never the diet name (that's already shown separately as a tag).`;
     case "ICON": return `${v.detail}. Pick an emoji that matches the meal's actual ingredients and slot.`;
     case "CROSS_DAY_VARIETY": return `${v.detail}. Replace this meal with a genuinely different dish — different hero ingredient AND different title pattern from the other day.`;
     case "JUDGE_ODD": return `A skeptical human-plausibility review flagged this meal: ${v.detail}. Replace it with something a real person would recognize and want to eat.`;
-    case "KITCHEN": return v.detail;
+    case "KITCHEN": return v.allowedMethods
+      ? `${v.detail}. Rebuild this meal (different dish if needed) with prep_method set to exactly one of: ${v.allowedMethods.join(", ")} — no other value is achievable with this kitchen access.`
+      : v.detail;
     case "CUSTOMS": return v.detail;
     default: return v.detail;
   }
@@ -1746,6 +1805,22 @@ Generate a REPLACEMENT ${meal.type} meal that fixes every problem above, still f
     console.error(`[validator-repair] regeneration failed for "${meal.name}": ${e.message}`);
     return null;
   }
+}
+
+// A title_quality violation's suggestedName is the exact, algorithmically-
+// correct fix (diet term stripped, whitespace collapsed) — trusting the
+// model to apply it verbatim via another regeneration round-trip is
+// unreliable (see suggestedName's own comment: it reliably swaps ONE diet
+// qualifier for ANOTHER instead of dropping it). Confirmed live 2026-07-20:
+// this churn survived even the directive repair message and exhausted
+// REPAIR_ATTEMPTS in a cross-day repair. When title_quality is the ONLY
+// thing wrong with a meal, skip the model call and apply the known-correct
+// name directly instead of gambling another attempt on it.
+function deterministicTitleFix(meal, violations) {
+  if (violations.length === 1 && violations[0].ruleId === "title_quality" && violations[0].suggestedName) {
+    return { ...meal, name: violations[0].suggestedName };
+  }
+  return null;
 }
 
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
@@ -3580,31 +3655,50 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         };
 
         let raw;
-        try {
-          raw = await requestFreshDay();
-        } catch (e) {
-          console.warn(`[generate-plan] Day ${overallDayNum} initial generation failed: ${e.message} — retrying`);
+        let meals, totalCalories;
+        let violations;
+        // BLOCK fails closed — a violating MEAL is never patched/repaired,
+        // full stop, and that guarantee is unchanged below. But until now,
+        // a BLOCK on the very first generation killed the whole day with
+        // ZERO chance at a fresh, independent attempt — a harsher bar than
+        // every other failure path gets (malformed JSON gets one retry;
+        // day-level REPAIR violations get a full fresh regeneration; only
+        // "the first draft happened to contain a real or false-positive
+        // allergen" got none). A fresh regeneration is a brand-new AI
+        // response from scratch, not a patch of the known-bad one, so it
+        // doesn't weaken the zero-tolerance guarantee — it just gives the
+        // model another independent roll before permanently failing the
+        // day. Confirmed live 2026-07-20: a gluten-free user's day failed
+        // outright on a single BLOCK hit with no chance to recover.
+        for (let blockAttempt = 1; blockAttempt <= REPAIR_ATTEMPTS; blockAttempt++) {
           try {
             raw = await requestFreshDay();
-          } catch (e2) {
-            console.error(`[generate-plan] Day ${overallDayNum} failed after retry: ${e2.message}`);
+          } catch (e) {
+            console.warn(`[generate-plan] Day ${overallDayNum} initial generation failed: ${e.message} — retrying`);
+            try {
+              raw = await requestFreshDay();
+            } catch (e2) {
+              console.error(`[generate-plan] Day ${overallDayNum} failed after retry: ${e2.message}`);
+              return null;
+            }
+          }
+
+          ({ meals, totalCalories } = rescale(raw.meals));
+          violations = validateDay(meals, validateOpts).violations;
+          for (const v of violations) logWallViolation({ ...v, day: overallDayNum, attempt: 0, source: blockAttempt > 1 ? "block-retry" : undefined });
+
+          if (!hasBlockingViolation(violations)) break;
+          for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
+            console.error(`[wall] BLOCK day=${overallDayNum} attempt=${blockAttempt} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}" — refusing to serve this meal, no repair attempted`);
+            if (process.env.WALL_DEBUG) {
+              const blockedMeal = meals.find(m => m.name === v.mealName);
+              console.error(`[wall-debug] ingredients=${JSON.stringify(blockedMeal?.ingredients)} allergens_present=${JSON.stringify(blockedMeal?.allergens_present)}`);
+            }
+          }
+          if (blockAttempt === REPAIR_ATTEMPTS) {
+            console.error(`[wall] day=${overallDayNum} still has a BLOCK violation after ${REPAIR_ATTEMPTS} fresh attempts — refusing to serve`);
             return null;
           }
-        }
-
-        let { meals, totalCalories } = rescale(raw.meals);
-        let violations = validateDay(meals, validateOpts).violations;
-        for (const v of violations) logWallViolation({ ...v, day: overallDayNum, attempt: 0 });
-
-        // BLOCK fails closed immediately — never repair-loops past it. A
-        // missing plan is an inconvenience; an allergen violation is a
-        // medical emergency, so this is checked before anything else runs,
-        // including the judge below.
-        if (hasBlockingViolation(violations)) {
-          for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
-            console.error(`[wall] BLOCK day=${overallDayNum} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}" — refusing to serve, no repair attempted`);
-          }
-          return null;
         }
 
         // Layer 2 (judge): only on this FIRST generation, and only once
@@ -3670,6 +3764,8 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
             }
             const newMeals = await Promise.all(meals.map(async (meal, i) => {
               if (!byIndex.has(i)) return meal;
+              const deterministic = deterministicTitleFix(meal, byIndex.get(i));
+              if (deterministic) return deterministic;
               const fixed = await regenerateMealForViolations(meal, byIndex.get(i), dayCtx.dietRules, dayCtx.kitchenAccessBlock, buildCarriedFoodPromptBlock(dayCtx.restrictedBorders));
               return fixed || meal;
             }));
@@ -3809,6 +3905,8 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           // days failed purely because the heuristic hero-ingredient bucket
           // disagreed with a genuinely correct model answer.
           blockingStillBad = stillBad.filter(sv => sv.severity !== "WARN");
+          const deterministic = deterministicTitleFix(replacement, blockingStillBad);
+          if (deterministic) { replacement = deterministic; blockingStillBad = []; }
           if (blockingStillBad.length === 0) break;
           currentViolations = blockingStillBad;
           replacement = null;
@@ -4041,6 +4139,8 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
       });
       for (const v of wallViolations) logWallViolation({ ...v, day: null, mealType: replacement.type, mealName: replacement.name, attempt, source: "regenerate-meal" });
       blocking = wallViolations.filter(v => v.severity !== "WARN");
+      const deterministic = deterministicTitleFix(replacement, blocking);
+      if (deterministic) { replacement = deterministic; blocking = []; }
       if (blocking.length === 0) break;
       currentViolations = blocking;
       replacement = null;
@@ -5237,5 +5337,6 @@ export {
   BORDER_COUNTRY_RULES, getCountryForAirport, detectRestrictedBorders,
   getDestinationFoodRules, unionCarriedBans, extractAirportCode,
   buildCarriedFoodNote, buildCustomsByCountry, buildKitchenAccessBlock,
+  deterministicTitleFix,
 };
 export default app;

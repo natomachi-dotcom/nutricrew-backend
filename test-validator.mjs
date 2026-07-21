@@ -64,6 +64,67 @@ console.log("\n=== A. Allergen derivative matching ===");
   // Qualifier: a "gluten-free" self-label in prose shouldn't trip on itself.
   const qualified = findMealAllergenViolations(meal({ name: "Gluten-free tamari stir-fry", description: "Uses gluten-free tamari.", ingredients: ing("chicken", "rice") }), new Set(["wheat_gluten"]), "");
   check('self-label qualifier avoids false positive ("gluten-free tamari")', qualified.length === 0, JSON.stringify(qualified));
+
+  // Regression: "corn tortilla" and "rice noodles"/"rice crackers" are
+  // factually, genuinely gluten-free (not wheat-based at all) with no
+  // self-label phrase needed — the bare word "tortilla"/"noodles"/
+  // "crackers" was banning them unconditionally as wheat_gluten. This is a
+  // BLOCK-severity allergen check with zero repair chance, so this false
+  // positive killed the whole day outright. Confirmed live 2026-07-20:
+  // "Scrambled Eggs & Corn Tortilla" was BLOCKed for a gluten-free user.
+  const cornTortilla = findMealAllergenViolations(meal({ name: "Scrambled Eggs & Corn Tortilla", ingredients: ing("eggs", "corn tortilla") }), new Set(["wheat_gluten"]), "");
+  check('"corn tortilla" is not flagged as wheat_gluten (no false positive)', cornTortilla.length === 0, JSON.stringify(cornTortilla));
+
+  const riceNoodles = findMealAllergenViolations(meal({ name: "Rice Noodle Stir-Fry", ingredients: ing("rice noodles", "vegetables") }), new Set(["wheat_gluten"]), "");
+  check('"rice noodles" is not flagged as wheat_gluten (no false positive)', riceNoodles.length === 0, JSON.stringify(riceNoodles));
+
+  const riceCrackers = findMealAllergenViolations(meal({ name: "Rice Crackers with Hummus", ingredients: ing("rice crackers", "hummus") }), new Set(["wheat_gluten"]), "");
+  check('"rice crackers" is not flagged as wheat_gluten (no false positive)', riceCrackers.length === 0, JSON.stringify(riceCrackers));
+
+  // But a genuinely wheat-based tortilla/noodle/cracker (no corn/rice
+  // qualifier) must still be caught.
+  const flourTortilla = findMealAllergenViolations(meal({ name: "Flour Tortilla Wrap", ingredients: ing("flour tortilla") }), new Set(["wheat_gluten"]), "");
+  check('"flour tortilla" is STILL flagged as wheat_gluten', flourTortilla.length > 0, JSON.stringify(flourTortilla));
+
+  const bareCrackers = findMealAllergenViolations(meal({ name: "Crackers with Cheese", ingredients: ing("crackers", "cheese") }), new Set(["wheat_gluten"]), "");
+  check('unqualified "crackers" (no corn/rice/gluten-free) is STILL flagged as wheat_gluten', bareCrackers.length > 0, JSON.stringify(bareCrackers));
+
+  // Regression: live verification (2026-07-20) found the model reliably
+  // self-reporting allergens_present=["wheat_gluten"] even when its own
+  // ingredient list already says "gluten-free bread"/"gluten-free tortilla"
+  // — the self-report was trusted unconditionally with zero cross-check
+  // against the same qualifier exemption the ingredient-name scan already
+  // has. This was the single dominant cause of "Day X couldn't be
+  // generated" (BLOCK severity, zero repair chance). The self-report must
+  // now be treated as contradicted (not trusted) when the ingredient list
+  // gives it a qualified, safe explanation.
+  const contradictedSelfReport = findMealAllergenViolations(
+    meal({ name: "Scrambled Eggs with Toast", ingredients: ing("eggs", "gluten-free bread", "margarine"), allergens_present: ["eggs", "wheat_gluten"] }),
+    new Set(["wheat_gluten"]), ""
+  );
+  check('self-reported "wheat_gluten" contradicted by "gluten-free bread" ingredient is NOT flagged', contradictedSelfReport.length === 0, JSON.stringify(contradictedSelfReport));
+
+  // But a self-report with NO qualified ingredient explanation (a genuinely
+  // hidden/derivative allergen the model knows about but didn't spell out as
+  // a discrete ingredient) must still be trusted and caught.
+  const genuineSelfReport = findMealAllergenViolations(
+    meal({ name: "Chicken with Teriyaki Glaze", ingredients: ing("chicken", "teriyaki glaze"), allergens_present: ["wheat_gluten"] }),
+    new Set(["wheat_gluten"]), ""
+  );
+  check("self-reported allergen with no qualified ingredient explanation is STILL flagged", genuineSelfReport.some(x => x.source === "self_report"), JSON.stringify(genuineSelfReport));
+
+  // Regression: live verification (2026-07-20, hotel/no-kitchen + gluten-free
+  // combo) found the qualifier exemption itself too narrow — it only
+  // recognized hyphenated "gluten-free"/"wheat-free", missing an underscore
+  // variant the model sometimes writes ("gluten_free bread") and a "no
+  // added ... wheat" negation phrase in a packaged-snack description. Both
+  // are genuinely safe, correctly-labeled ingredients that were getting
+  // BLOCKed with zero repair chance.
+  const underscoreQualified = findMealAllergenViolations(meal({ name: "Scrambled Eggs with Toast", ingredients: ing("eggs", "gluten_free bread") }), new Set(["wheat_gluten"]), "");
+  check('"gluten_free bread" (underscore) is not flagged as wheat_gluten', underscoreQualified.length === 0, JSON.stringify(underscoreQualified));
+
+  const noAddedWheatQualified = findMealAllergenViolations(meal({ name: "Rice Cakes with Almond Butter", ingredients: ing("rice cakes", "almond butter (natural, no added sugar or wheat)") }), new Set(["wheat_gluten"]), "");
+  check('"no added sugar or wheat" negation phrase is not flagged as wheat_gluten', noAddedWheatQualified.length === 0, JSON.stringify(noAddedWheatQualified));
 }
 
 // ── C. Diet compliance ──────────────────────────────────────────────────
@@ -156,6 +217,17 @@ console.log("\n=== B. Meal slot content ===");
   const fine = findMealSlotContentViolation(meal({ type: "Breakfast", name: "Veggie Omelette", description: "Eggs with spinach and feta." }));
   check("normal breakfast content passes", !fine, JSON.stringify(fine));
 
+  const realCake = findMealSlotContentViolation(meal({ type: "Dinner", name: "Chocolate Cake", description: "A rich chocolate cake." }));
+  check("a genuine cake is STILL flagged as dessert-as-meal", !!realCake, JSON.stringify(realCake));
+
+  // Regression: live verification (2026-07-20, hotel/no-kitchen + gluten-free
+  // combo) found "Tuna Salad with Rice Cakes" repeatedly rejected as
+  // "'Cakes' is dessert standing in as the entire meal" — a cross-day repair
+  // loop that never converged because rice cakes are a genuinely safe,
+  // gluten-free-friendly savory snack/side, not a dessert.
+  const riceCakesLunch = findMealSlotContentViolation(meal({ type: "Lunch", name: "Tuna Salad with Rice Cakes", description: "Canned tuna salad served with rice cakes." }));
+  check('"rice cakes" is not flagged as dessert-as-meal', !riceCakesLunch, JSON.stringify(riceCakesLunch));
+
   const structure = getExpectedMealStructure({ calorieTarget: null, gainTarget: null, maintenanceTarget: 2000 });
   check("maintenance goal expects exactly 2 snacks", structure.snackMin === 2 && structure.snackMax === 2, JSON.stringify(structure));
 }
@@ -171,6 +243,14 @@ console.log("\n=== F. Kitchen access ===");
   check("microwave meal fine for microwave-only day", !microwaveOk);
   const stoveOk = findMealKitchenViolation(meal({ prep_method: "stove_oven" }), ["full_kitchen"]);
   check("stove_oven meal fine for full_kitchen day", !stoveOk);
+
+  // Regression: live verification (2026-07-20) found kitchen_access repairs
+  // failing repeatedly on hotel/no-kitchen days — the repair message only
+  // restated the problem (wrong prep_method) without saying what prep_method
+  // TO use instead, unlike the initial-generation prompt which always names
+  // the exact allowed set. The violation now carries allowedMethods so the
+  // repair message can hand over the exact fix directly.
+  check('kitchen violation carries allowedMethods for the repair message', Array.isArray(stoveInHotel?.allowedMethods) && stoveInHotel.allowedMethods.includes("no_cook"), JSON.stringify(stoveInHotel));
 }
 
 // ── G. Customs ────────────────────────────────────────────────────────────
