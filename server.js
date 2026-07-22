@@ -5288,8 +5288,17 @@ Return compact JSON, no commentary.`;
       }
     }
 
-    // Store in CRUD backend (fire-and-forget)
-    const month = new Date(pairings[0].pairingDate).toISOString().slice(0, 7);
+    // Store in CRUD backend (fire-and-forget). Keyed by TODAY's month, not
+    // the first pairing's month — the plan's own content always starts
+    // today ("Cover the calendar from today through the last return date"
+    // above), and GymPlanModal's FAB-triggered lookup (no month prop, the
+    // common "just tap Gym Plan any day" path) defaults to today's month
+    // too. Confirmed live 2026-07-22: a roster uploaded for a FUTURE month
+    // (e.g. uploading in July for an August trip) stored the plan under
+    // "2026-08" while the FAB's default lookup queried "2026-07" — a
+    // guaranteed miss that showed the empty "upload your roster" prompt
+    // even though a real plan had just been generated.
+    const month = new Date().toISOString().slice(0, 7);
     crudInternal("/api/gym-plan/store", { email, month, plan }).catch(e => console.error("gym-plan store error:", e.message));
 
     res.json({ ok: true, plan });
