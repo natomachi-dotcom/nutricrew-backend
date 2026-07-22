@@ -12,6 +12,7 @@ const {
   findMealTitleViolation, findMealIconViolation, getMealHeroCategory,
   findCrossDayVarietyViolations, titlesShareSignificantPattern,
   findMealAllergenViolations, ALLERGEN_DERIVATIVES, deterministicTitleFix, deterministicFodmapGarlicFix,
+  deterministicIngredientStripFix,
 } = await import("./server.js");
 
 let passed = 0;
@@ -198,6 +199,39 @@ console.log("\n=== Normal meals pass every check ===");
 
   const garlicPlusOther = deterministicFodmapGarlicFix(garlicMeal, [garlicViolation, { ruleId: "kitchen_access", detail: "wrong prep_method" }]);
   check("deterministicFodmapGarlicFix declines when OTHER violations are also present", garlicPlusOther === null, JSON.stringify(garlicPlusOther));
+
+  // General escape hatch: when a meal is stuck on ANY single flagged
+  // ingredient (not just fodmap garlic/onion) after the model's normal
+  // repair attempts are exhausted, strip it instead of failing the whole
+  // day. This is the last-resort safety net wired in right before a day
+  // would otherwise be marked "couldn't be generated."
+  const sugarViolation = { ruleId: "diet_compliance", dietTag: "carnivore", detail: "sugar" };
+  const jerkyMeal = { name: "Sugared Beef Jerky", description: "Beef jerky with a touch of sugar in the cure.", ingredients: [{ name: "beef jerky" }, { name: "sugar" }, { name: "salt" }] };
+  const jerkyFixed = deterministicIngredientStripFix(jerkyMeal, [sugarViolation]);
+  check("deterministicIngredientStripFix generalizes to carnivore sugar", !jerkyFixed.ingredients.some(i => /sugar/i.test(i.name)) && !/sugar/i.test(jerkyFixed.description), JSON.stringify(jerkyFixed));
+
+  const butterViolation = { ruleId: "diet_compliance", dietTag: "vegan", detail: "butter" };
+  const toastMeal = { name: "Toast with Butter", ingredients: [{ name: "toast" }, { name: "butter" }] };
+  const toastFixed = deterministicIngredientStripFix(toastMeal, [butterViolation]);
+  check("deterministicIngredientStripFix generalizes to vegan butter", !toastFixed.ingredients.some(i => /butter/i.test(i.name)), JSON.stringify(toastFixed));
+
+  // Declines for structural, non-ingredient violations (can't fix a
+  // combination rule by removing one word) — e.g. kosher's hand-written
+  // "meat and dairy combined in one meal" sentence.
+  const kosherStructural = { ruleId: "diet_compliance", dietTag: "kosher", detail: "meat and dairy combined in one meal" };
+  const kosherNotFixed = deterministicIngredientStripFix({ name: "Cheeseburger" }, [kosherStructural]);
+  check("deterministicIngredientStripFix declines for a structural (multi-word sentence) violation", kosherNotFixed === null, JSON.stringify(kosherNotFixed));
+
+  // Declines when stripping would leave the meal with zero ingredients.
+  const onlyIngredientViolation = { ruleId: "diet_compliance", dietTag: "vegan", detail: "honey" };
+  const emptyResult = deterministicIngredientStripFix({ name: "Honey", ingredients: [{ name: "honey" }] }, [onlyIngredientViolation]);
+  check("deterministicIngredientStripFix declines rather than leave zero ingredients", emptyResult === null, JSON.stringify(emptyResult));
+
+  // Declines for non-diet_compliance violations (e.g. allergens) — this is
+  // never the mechanism for silently dropping a personal/medical allergen.
+  const allergenViolation = { code: "ALLERGEN", ruleId: "no_allergens", detail: "peanuts" };
+  const allergenNotFixed = deterministicIngredientStripFix({ name: "PB Sandwich", ingredients: [{ name: "peanut butter" }, { name: "bread" }] }, [allergenViolation]);
+  check("deterministicIngredientStripFix declines for allergen violations (safety boundary)", allergenNotFixed === null, JSON.stringify(allergenNotFixed));
 }
 
 // ── Hero classification + title-pattern matching ──────────────────────────

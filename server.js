@@ -1988,6 +1988,46 @@ function deterministicFodmapGarlicFix(meal, violations) {
   };
 }
 
+// General-purpose version of the fodmap-garlic fix above, for ANY single
+// diet_compliance violation whose detail is a bare ingredient/flavor term
+// (not a structural sentence like kosher's "meat and dairy combined in one
+// meal", which can't be fixed by removing a word). This is the LAST-RESORT
+// escape hatch — called only after the model has already had its normal
+// REPAIR_ATTEMPTS chances to fix things properly, right before a day would
+// otherwise be marked "couldn't be generated" over one stuck ingredient.
+// Getting a mostly-right meal with one flavor ingredient quietly dropped is
+// a far better outcome for the crew member than losing the whole day.
+function isStrippableIngredientDetail(detail) {
+  if (!detail || typeof detail !== "string") return false;
+  const trimmed = detail.trim();
+  if (!trimmed || trimmed.length > 30) return false;
+  if (/[.!?]/.test(trimmed)) return false; // a hand-written sentence, not a matched word/phrase
+  if (trimmed.split(/\s+/).length > 3) return false; // e.g. "meat and dairy combined in one meal"
+  return true;
+}
+function deterministicIngredientStripFix(meal, violations) {
+  if (violations.length !== 1) return null;
+  const v = violations[0];
+  if (v.ruleId !== "diet_compliance" || !isStrippableIngredientDetail(v.detail)) return null;
+  const escaped = escapeRegExp(v.detail.trim());
+  const testPattern = new RegExp(`\\b${escaped}\\b`, "i");
+  const stripWord = (text) => (text ? text.replace(new RegExp(`\\b${escaped}\\b`, "gi"), "").replace(/\s{2,}/g, " ").replace(/\s+([,.])/g, "$1").trim() : text);
+  const strippedIngredients = (meal.ingredients || []).filter(i => {
+    const n = typeof i === "string" ? i : i?.name;
+    return !(n && testPattern.test(n));
+  });
+  // Removing every ingredient would leave an empty/nonsensical meal — bail
+  // out rather than ship that (the caller's normal failure path takes over).
+  if (strippedIngredients.length === 0) return null;
+  return {
+    ...meal,
+    ingredients: strippedIngredients,
+    name: stripWord(meal.name),
+    description: stripWord(meal.description),
+    tip: stripWord(meal.tip),
+  };
+}
+
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
 // Uses actual age if provided, defaults to 35. Height defaults to 170 cm.
 function estimateTDEE(data) {
@@ -3952,6 +3992,46 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           }
         }
 
+        // Last-resort escape hatch — the model has already had its normal
+        // REPAIR_ATTEMPTS chances to fix things properly. If a meal is
+        // still stuck on exactly one flagged ingredient (not a structural
+        // day-level issue), strip that ingredient out directly rather than
+        // failing the whole day over it. Confirmed live 2026-07-22: this is
+        // a real, recurring failure mode (fodmap garlic, vegan butter/egg,
+        // carnivore sugar all showed the model reaching for the SAME
+        // flagged ingredient again on the very next attempt, unchanged) —
+        // a mostly-right meal with one flavor ingredient quietly dropped is
+        // a far better outcome for the crew member than "couldn't be
+        // generated."
+        const stillRepairable = repairableViolations(violations);
+        if (stillRepairable.length > 0) {
+          const strippableByIndex = new Map();
+          for (const v of stillRepairable) {
+            if (v.mealIndex === undefined) continue;
+            if (!strippableByIndex.has(v.mealIndex)) strippableByIndex.set(v.mealIndex, []);
+            strippableByIndex.get(v.mealIndex).push(v);
+          }
+          let anyStripped = false;
+          const strippedMeals = meals.map((meal, i) => {
+            const mealViolations = strippableByIndex.get(i);
+            if (!mealViolations) return meal;
+            const stripped = deterministicIngredientStripFix(meal, mealViolations);
+            if (stripped) anyStripped = true;
+            return stripped || meal;
+          });
+          if (anyStripped) {
+            ({ meals, totalCalories } = rescale(strippedMeals));
+            violations = validateDay(meals, validateOpts).violations;
+            for (const v of violations) logWallViolation({ ...v, day: overallDayNum, attempt: REPAIR_ATTEMPTS + 1, source: "last-resort-strip" });
+            if (hasBlockingViolation(violations)) {
+              for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
+                console.error(`[wall] BLOCK (introduced during last-resort strip) day=${overallDayNum} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}"`);
+              }
+              return null;
+            }
+          }
+        }
+
         if (repairableViolations(violations).length > 0) {
           for (const v of repairableViolations(violations)) {
             console.error(`[validator] day=${overallDayNum} FAILED after ${REPAIR_ATTEMPTS} repair attempts — refusing to serve. ${v.ruleId ?? v.code} meal="${v.mealName ?? ""}" detail="${v.detail}"`);
@@ -4049,19 +4129,22 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         // not reliable enough to trust without the same retry room every
         // other repair path already gets.
         let replacement = null;
+        let lastAttempted = null;
         let currentViolations = [v];
         let blockingStillBad = [];
+        const wallCheckCtx = {
+          requiredAllergenTags, customAllergyTerm, activeDietTags: activeDietTagsForRepair,
+          calorieTarget: null, kitchenList: dayKitchen, restrictedBorders: ctx.restrictedBorders,
+        };
         for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
           replacement = await regenerateMealForViolations(meal, currentViolations, ctx.dietRules, buildKitchenAccessBlock(dayKitchen), buildCarriedFoodPromptBlock(ctx.restrictedBorders));
           if (!replacement) break;
+          lastAttempted = replacement;
           // Full Wall re-check (every meal-scope rule, not just the ones
           // this specific fix targeted) — a cross-day repair is still a
           // fresh AI response and must clear the whole registry, not just
           // the rule it was regenerated for.
-          const stillBad = runWallOnMeal(replacement, {
-            requiredAllergenTags, customAllergyTerm, activeDietTags: activeDietTagsForRepair,
-            calorieTarget: null, kitchenList: dayKitchen, restrictedBorders: ctx.restrictedBorders,
-          });
+          const stillBad = runWallOnMeal(replacement, wallCheckCtx);
           for (const bv of stillBad) logWallViolation({ ...bv, day: v.day, mealName: replacement.name, mealType: replacement.type, attempt, source: "cross-day-repair" });
           // WARN-severity findings (hero_ingredient_agreement is currently
           // the only one) are explicitly documented as never blocking or
@@ -4073,10 +4156,21 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           // disagreed with a genuinely correct model answer.
           blockingStillBad = stillBad.filter(sv => sv.severity !== "WARN");
           const deterministic = deterministicTitleFix(replacement, blockingStillBad) || deterministicFodmapGarlicFix(replacement, blockingStillBad);
-          if (deterministic) { replacement = deterministic; blockingStillBad = []; }
+          if (deterministic) { replacement = deterministic; lastAttempted = deterministic; blockingStillBad = []; }
           if (blockingStillBad.length === 0) break;
           currentViolations = blockingStillBad;
           replacement = null;
+        }
+        // Last-resort escape hatch, same as the main per-day repair loop:
+        // if the LAST attempt is stuck on exactly one flagged ingredient,
+        // strip it directly rather than failing the whole day over it.
+        if (!replacement && lastAttempted && blockingStillBad.length === 1) {
+          const stripped = deterministicIngredientStripFix(lastAttempted, blockingStillBad);
+          if (stripped) {
+            const recheck = runWallOnMeal(stripped, wallCheckCtx).filter(sv => sv.severity !== "WARN");
+            if (recheck.length === 0) { replacement = stripped; blockingStillBad = []; }
+            else blockingStillBad = recheck;
+          }
         }
         if (!replacement) {
           console.error(`[validator] day=${v.day} cross-day repair for "${meal.name}" still has issues after ${REPAIR_ATTEMPTS} attempts, marking day failed: ${JSON.stringify(blockingStillBad.map(sv => sv.detail))}`);
@@ -4291,26 +4385,42 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
     // "microwave" for a hotel/no-kitchen day and the whole request 502'd,
     // leaving the original (still-allergenic) meal in place.
     let replacement = null;
+    let lastAttempted = null;
     let currentViolations = [{ code: "ALLERGEN", source: "user", detail: excludeIngredient }];
     let blocking = [];
+    const wallCheckCtx = {
+      requiredAllergenTags, customAllergyTerm: excludeIngredient, activeDietTags,
+      calorieTarget: ctx.calorieTarget ?? ctx.gainTarget ?? ctx.maintenanceTarget ?? null,
+      kitchenList: rawKitchen, restrictedBorders: ctx.restrictedBorders,
+    };
     for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
       replacement = await regenerateMealForViolations(
         meal, currentViolations, personalNote, ctx.kitchenAccessBlock,
         buildCarriedFoodPromptBlock(ctx.restrictedBorders)
       );
       if (!replacement) break;
-      const wallViolations = runWallOnMeal(replacement, {
-        requiredAllergenTags, customAllergyTerm: excludeIngredient, activeDietTags,
-        calorieTarget: ctx.calorieTarget ?? ctx.gainTarget ?? ctx.maintenanceTarget ?? null,
-        kitchenList: rawKitchen, restrictedBorders: ctx.restrictedBorders,
-      });
+      lastAttempted = replacement;
+      const wallViolations = runWallOnMeal(replacement, wallCheckCtx);
       for (const v of wallViolations) logWallViolation({ ...v, day: null, mealType: replacement.type, mealName: replacement.name, attempt, source: "regenerate-meal" });
       blocking = wallViolations.filter(v => v.severity !== "WARN");
       const deterministic = deterministicTitleFix(replacement, blocking) || deterministicFodmapGarlicFix(replacement, blocking);
-      if (deterministic) { replacement = deterministic; blocking = []; }
+      if (deterministic) { replacement = deterministic; lastAttempted = deterministic; blocking = []; }
       if (blocking.length === 0) break;
       currentViolations = blocking;
       replacement = null;
+    }
+    // Last-resort escape hatch, same as the day-generation repair path: if
+    // the LAST attempt is stuck on exactly one flagged diet ingredient
+    // (never a personal allergen — deterministicIngredientStripFix only
+    // ever touches diet_compliance violations), strip it directly rather
+    // than failing the whole request over it.
+    if (!replacement && lastAttempted && blocking.length === 1) {
+      const stripped = deterministicIngredientStripFix(lastAttempted, blocking);
+      if (stripped) {
+        const recheck = runWallOnMeal(stripped, wallCheckCtx).filter(sv => sv.severity !== "WARN");
+        if (recheck.length === 0) { replacement = stripped; blocking = []; }
+        else blocking = recheck;
+      }
     }
     if (!replacement) {
       console.error(`[wall] /api/regenerate-meal replacement still failed the Wall for "${meal.name}" after ${REPAIR_ATTEMPTS} attempts: ${blocking.map(v => `${v.ruleId ?? v.code}(${v.detail})`).join(", ")}`);
@@ -5504,6 +5614,6 @@ export {
   BORDER_COUNTRY_RULES, getCountryForAirport, detectRestrictedBorders,
   getDestinationFoodRules, unionCarriedBans, extractAirportCode,
   buildCarriedFoodNote, buildCustomsByCountry, buildKitchenAccessBlock,
-  deterministicTitleFix, deterministicFodmapGarlicFix,
+  deterministicTitleFix, deterministicFodmapGarlicFix, deterministicIngredientStripFix,
 };
 export default app;
