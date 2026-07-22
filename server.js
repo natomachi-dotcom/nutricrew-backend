@@ -718,12 +718,23 @@ const ALLERGEN_DERIVATIVES = {
   // noodles/crackers/tortillas exclude a "corn"/"rice" qualifier right
   // before them — those are genuinely, factually not wheat-based (corn
   // tortillas, rice noodles, rice crackers are common everyday gluten-free
-  // staples), unlike bread/pasta/flour which have no such common non-wheat
-  // default. Confirmed live 2026-07-20: "corn tortilla" was BLOCKed as a
-  // wheat_gluten allergen for a gluten-free user with zero repair chance
-  // (BLOCK severity never gets repaired) — a false positive on a dish that
-  // was correctly, safely gluten-free to begin with.
-  wheat_gluten: /\b(wheat|flour|breads?|breadcrumbs?|panko|pasta|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|soy sauce)\b|(?<!(?:corn|rice)[- ])\b(noodles?|crackers?|tortillas?)\b/i,
+  // staples), unlike bread/pasta/flour/wraps which have no such common
+  // non-wheat default. Confirmed live 2026-07-20: "corn tortilla" was
+  // BLOCKed as a wheat_gluten allergen for a gluten-free user with zero
+  // repair chance (BLOCK severity never gets repaired) — a false positive
+  // on a dish that was correctly, safely gluten-free to begin with.
+  // "flour" excludes a common gluten-free flour qualifier right before it
+  // (chickpea, almond, coconut, rice, oat, corn, quinoa, cassava, tapioca,
+  // potato, sorghum) — those are genuinely gluten-free flour alternatives,
+  // not wheat flour in disguise. Confirmed live 2026-07-20: "chickpea
+  // flour" (used for vegan pancakes) was BLOCKed as wheat_gluten.
+  // "wraps?" was previously missing entirely — a genuinely wheat-based wrap
+  // went completely undetected by the ingredient scan, while a "gluten-free
+  // wrap" (correctly safe) still got BLOCKed via the self-report signal
+  // with no ingredient-level match to contradict it. Added as an always-
+  // checked term (like bread/pasta) since, unlike tortillas, there's no
+  // common non-wheat "default" wrap the way there is a corn tortilla.
+  wheat_gluten: /\b(wheat|breads?|breadcrumbs?|panko|pasta|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|soy sauce|wraps?)\b|(?<!(?:chickpea|almond|coconut|rice|oat|corn|quinoa|cassava|tapioca|potato|sorghum)\s)\bflour\b|(?<!(?:corn|rice)[- ])\b(noodles?|crackers?|tortillas?)\b/i,
   sesame: /\b(sesame|tahini|halva|za'?\s?atar|benne|gomashio|hummus|baba ganoush)\b/i,
   mustard: /\b(mustard|dijon)\b/i,
   celery: /\b(celery|celeriac)\b/i,
@@ -775,7 +786,7 @@ const ALLERGEN_SELF_LABEL_QUALIFIER = {
 // tripped a wheat_gluten self-report BLOCK because the strict pattern's
 // corn/rice lookbehind meant patternMatches never saw it at all.
 const ALLERGEN_CATEGORY_HINT = {
-  wheat_gluten: /\b(wheat|flour|breads?|breadcrumbs?|panko|pasta|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|soy sauce|noodles?|crackers?|tortillas?)\b/i,
+  wheat_gluten: /\b(wheat|flour|breads?|breadcrumbs?|panko|pasta|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|soy sauce|noodles?|crackers?|tortillas?|wraps?)\b/i,
   milk: /\b(buttermilk|creams?|butter|cheeses?|parmesan|cheddar|mozzarella|brie|feta|gouda|provolone|camembert|gruy[eè]re|halloumi|manchego|goat cheese|cream cheese|cottage cheese|blue cheese|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half|milk|yogh?urts?)\b/i,
 };
 
@@ -835,7 +846,18 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
     // against the ingredient string itself, even though the qualifying phrase
     // was right there in the same ingredient name.
     const patternMatches = pattern ? ingredientNames.filter(n => pattern.test(n)) : [];
-    const ingHit = patternMatches.find(n => !(qualifier && qualifier.test(n)));
+    // Beyond the tag-specific "-free" qualifier, also honor a generic
+    // negation right in the ingredient string itself — "fruit jam (no
+    // sesame)", "granola (no honey/egg)" — the model routinely writes these
+    // instead of "sesame-free"/"egg-free", and previously only wheat_gluten
+    // had this covered (via its own qualifier regex). Confirmed live
+    // 2026-07-20: both sesame_free and egg_free BLOCKed a meal purely
+    // because its own safety-labeled ingredient name used "no X" phrasing.
+    const ingHit = patternMatches.find(n => {
+      if (qualifier && qualifier.test(n)) return false;
+      const m = n.match(pattern);
+      return !(m && hasNegationBeforeMatch(n, m.index));
+    });
     if (ingHit) {
       violations.push({ code: "ALLERGEN", tag, source: "ingredient", detail: ingHit });
       continue;
@@ -1413,11 +1435,26 @@ function describeDietViolation(v) {
   if (v.dietTag === "vegan" && /\bbutter\b/i.test(v.detail)) {
     return `Contains "${v.detail}" which violates the "vegan" diet rule. Replace with "vegan butter" or "plant-based margarine" explicitly, or use olive/coconut oil instead.`;
   }
-  if (v.dietTag === "vegan" && /\begg/i.test(v.detail)) {
-    return `Contains "${v.detail}" which violates the "vegan" diet rule. Replace the egg entirely — use a tofu scramble, chickpea flour ("besan") scramble, or commercial egg replacer, not a real egg in any form.`;
+  // "mayo"/"mayonnaise"/"aioli"/"hollandaise" are all egg-based by default —
+  // confirmed live 2026-07-21 that the model reliably reached for "mayo" or
+  // "dairy-free mayo" (still egg-based; dairy-free doesn't touch the egg
+  // content) as if it were a vegan-safe swap.
+  if (v.dietTag === "vegan" && /\begg|mayo|aioli|hollandaise/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "vegan" diet rule — this is egg-based by default (a "dairy-free" label doesn't change that). Replace it entirely — use "vegan mayo"/"eggless mayo" explicitly if a spread is needed, or a tofu scramble/chickpea flour ("besan") scramble if it's the egg dish itself, not a real egg in any form.`;
   }
   if (v.dietTag === "vegan" && /\b(cheese|milk|cream|yogh?urt)\b/i.test(v.detail)) {
     return `Contains "${v.detail}" which violates the "vegan" diet rule. Replace with the named plant-based alternative explicitly (e.g. "vegan cheese"/"nutritional yeast", "oat milk"/"almond milk", "coconut cream", "coconut yogurt") — never the real dairy version.`;
+  }
+  // Live verification (2026-07-21) found garlic/onion the dominant recurring
+  // fodmap trip-up, reintroduced across repair attempts on multiple meals in
+  // the same day — the generic message never named the standard FODMAP-safe
+  // substitute (the flavor compounds that trigger FODMAP symptoms aren't
+  // fat-soluble, so garlic/onion-infused oil carries the flavor without them).
+  if (v.dietTag === "fodmap" && /\b(garlic|onions?)\b/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "fodmap" diet rule. Replace with "garlic-infused oil" and/or "the green tops of scallions/spring onions" explicitly — both carry the flavor without the FODMAP-triggering compounds (which aren't fat-soluble), unlike whole garlic/onion.`;
+  }
+  if (v.dietTag === "fodmap" && /high[- ]fructose corn syrup/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "fodmap" diet rule. Replace with a low-FODMAP sweetener explicitly (maple syrup, table sugar/sucrose, or a small amount of stevia) — never high-fructose corn syrup or honey.`;
   }
   return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
 }
@@ -2005,6 +2042,7 @@ function getSingleDietBlock(diet, calorieTarget, data) {
       return `DIET: VEGAN — STRICT RULES:
 - NO animal products: no meat, fish, eggs, dairy, honey, gelatin, or whey.
 - Every ingredient must be 100% plant-based. Watch for hidden animal products: use plant butter/coconut oil not butter; dairy-free dark chocolate not regular; vegan dressing not Caesar; egg-free pasta; dairy-free bread.
+- "Dairy-free" alone does NOT make something vegan-safe if it's egg-based — standard mayo/aioli/hollandaise are egg-based regardless of dairy content. Use "vegan mayo"/"eggless mayo" explicitly, never plain "dairy-free mayo".
 - Protein must come from: legumes, tofu, tempeh, seitan, edamame, nuts, seeds, nutritional yeast.
 - Grocery "dairy" list: plant-based alternatives only (oat milk, coconut yogurt, vegan cheese) — no actual dairy.
 - If meal protein <15g, suggest a plant-protein fix in the "tip" field.`;
@@ -2059,7 +2097,7 @@ function getSingleDietBlock(diet, calorieTarget, data) {
 - NO eggs in any form: whole eggs, egg whites, mayonnaise, most baked goods leavened/bound with egg, some pastas, meringue, hollandaise/béarnaise sauce.
 - Watch for hidden egg: quiche, frittata, French toast, breaded/battered items, some processed meats (as binder), egg-wash glazed bread.
 - Protein must come from non-egg sources instead: meat, fish, dairy, legumes, tofu, nuts/seeds (unless also nut-free).
-- Name the egg-free alternative explicitly (e.g. "egg-free mayo" not "mayo").`;
+- Name the egg-free alternative explicitly (e.g. "egg-free mayo" not "mayo"). "Dairy-free mayo" does NOT make it egg-free — standard mayonnaise (dairy-free or not) is egg-based by default; the label must say "egg-free"/"vegan mayo" specifically, dairy-free alone changes nothing about the egg content.`;
     case "shellfish_free":
       return `DIET: SHELLFISH ALLERGY — STRICT RULES (can be life-threatening, zero tolerance):
 - NO crustaceans (shrimp, crab, lobster, crayfish) or mollusks (clams, mussels, oysters, scallops, squid, octopus), in any form: whole, in stocks/broths/sauces (e.g. oyster sauce, fish sauce often contains shellfish, shrimp paste), or as flavoring.

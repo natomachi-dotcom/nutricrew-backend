@@ -199,6 +199,50 @@ console.log("\n=== A. Allergen derivative matching ===");
   // still be caught — only tip is excluded, not description/name.
   const realShellfishInDescription = findMealAllergenViolations(meal({ name: "Seafood Pasta", description: "Pasta tossed with shrimp and scallops in garlic butter.", ingredients: ing("pasta", "shrimp", "scallops") }), new Set(["shellfish"]), "");
   check("shellfish stated in description is STILL flagged", realShellfishInDescription.length > 0, JSON.stringify(realShellfishInDescription));
+
+  // Regression: live verification (2026-07-21, full matrix) found the "no X"
+  // negation phrasing wasn't just a wheat_gluten problem — "fruit jam (no
+  // sesame)" and "granola (no honey/egg)" as discrete INGREDIENT names still
+  // tripped sesame_free/egg_free BLOCKs, because only wheat_gluten's own
+  // qualifier regex had the negation window; every other tag only matched
+  // hyphenated "-free" phrasing. Generalized so any tag's ingredient-level
+  // match also honors a negation right in that same ingredient string.
+  const noSesameJam = findMealAllergenViolations(meal({ name: "Toast with Jam", ingredients: ing("toast", "fruit jam (no sesame)") }), new Set(["sesame"]), "");
+  check('"fruit jam (no sesame)" is not flagged as sesame', noSesameJam.length === 0, JSON.stringify(noSesameJam));
+
+  const noEggGranola = findMealAllergenViolations(meal({ name: "Yogurt with Granola", ingredients: ing("coconut yogurt", "granola (no honey/egg)") }), new Set(["eggs"]), "");
+  check('"granola (no honey/egg)" is not flagged as eggs', noEggGranola.length === 0, JSON.stringify(noEggGranola));
+
+  // But a genuine, unqualified sesame ingredient must still be caught.
+  const realTahini = findMealAllergenViolations(meal({ name: "Hummus", ingredients: ing("chickpeas", "tahini") }), new Set(["sesame"]), "");
+  check('unqualified "tahini" is STILL flagged as sesame', realTahini.length > 0, JSON.stringify(realTahini));
+
+  // Regression: "wraps?" was entirely missing from the wheat_gluten pattern
+  // — a genuinely wheat-based wrap went undetected by the ingredient scan,
+  // while a "gluten-free wrap" (correctly safe) still got BLOCKed via the
+  // self-report signal with no ingredient-level match to contradict it.
+  const glutenFreeWrapSelfReport = findMealAllergenViolations(
+    meal({ name: "Canned Tuna Salad Wrap", ingredients: ing("canned tuna", "mayonnaise", "gluten-free wrap"), allergens_present: ["fish", "eggs", "wheat_gluten"] }),
+    new Set(["wheat_gluten"]), ""
+  );
+  check('self-reported wheat_gluten contradicted by "gluten-free wrap" is NOT flagged', glutenFreeWrapSelfReport.length === 0, JSON.stringify(glutenFreeWrapSelfReport));
+
+  const flourWrap = findMealAllergenViolations(meal({ name: "Chicken Wrap", ingredients: ing("chicken", "flour wrap") }), new Set(["wheat_gluten"]), "");
+  check('unqualified "flour wrap" is STILL flagged as wheat_gluten', flourWrap.length > 0, JSON.stringify(flourWrap));
+
+  // Regression: bare "flour" had no exemption for common gluten-free
+  // alternative flours (chickpea, almond, coconut, rice, oat, corn, quinoa,
+  // cassava, tapioca, potato, sorghum) — "chickpea flour" (a vegan pancake
+  // base) was BLOCKed as wheat_gluten for a gluten-free user.
+  const chickpeaFlour = findMealAllergenViolations(meal({ name: "Chickpea Pancakes", ingredients: ing("chickpea flour", "water", "salt") }), new Set(["wheat_gluten"]), "");
+  check('"chickpea flour" is not flagged as wheat_gluten', chickpeaFlour.length === 0, JSON.stringify(chickpeaFlour));
+
+  const almondFlour = findMealAllergenViolations(meal({ name: "Almond Flour Muffins", ingredients: ing("almond flour", "eggs", "honey") }), new Set(["wheat_gluten"]), "");
+  check('"almond flour" is not flagged as wheat_gluten', almondFlour.length === 0, JSON.stringify(almondFlour));
+
+  // But real wheat flour (no qualifier) must still be caught.
+  const realFlour = findMealAllergenViolations(meal({ name: "Pancakes", ingredients: ing("flour", "eggs", "milk") }), new Set(["wheat_gluten"]), "");
+  check('unqualified "flour" is STILL flagged as wheat_gluten', realFlour.length > 0, JSON.stringify(realFlour));
 }
 
 // ── C. Diet compliance ──────────────────────────────────────────────────
