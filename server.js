@@ -207,6 +207,20 @@ app.use(express.json({ limit: "8mb" }));
 
 const client = new Anthropic();
 const FAST_MODEL = "claude-haiku-4-5-20251001";
+// Roster-photo parsing is the one endpoint that gets a stronger model,
+// deliberately, by user decision (2026-07-22) — every other generation
+// path in this app stays on FAST_MODEL for cost control. Confirmed live
+// that Haiku reliably fabricates entire fake trips (plausible-sounding
+// cities like "Grenada"/"Bogota"/"Goose Bay") from 2-4 letter internal
+// duty-status codes (GD, BO, REAX) on real crew-portal roster screenshots,
+// even after three escalating rounds of guardrails (explicit anti-
+// hallucination prompt rules, then a deterministic IATA-code-format
+// check) — the model kept finding new ways to invent a plausible-looking
+// answer rather than correctly report "no destination here." This is a
+// vision-reasoning capability gap, not a prompting gap, so it needs a
+// stronger model rather than another prompt iteration. Roster uploads are
+// also far rarer than meal-plan generations, so the cost impact is small.
+const VISION_MODEL = "claude-sonnet-5";
 
 // Conditional construction, same pattern as `stripe` below — every call site
 // already checks process.env.RESEND_API_KEY before touching `resend` (see
@@ -4447,10 +4461,20 @@ const ROSTER_SCHEMA = {
           pairingDays:  { type: "number" },
           departure:    { type: "string" },
           destinations: { type: "array", items: { type: "string" } },
+          // Parallel array to "destinations" (same order, same length) — the
+          // exact 3-letter IATA code each city name was read from. Lets the
+          // server deterministically verify every destination came from a
+          // real airport code rather than trusting the model's own city-name
+          // choice, which — confirmed live 2026-07-22 — reliably fabricates
+          // a plausible-sounding city (Grenada, Bogota, Godthab, Cancun,
+          // Yellowknife) from 2-4 letter internal duty-status codes (GD, BO,
+          // REAX) that are never real airport codes, even when explicitly
+          // told not to.
+          destinationCodes: { type: "array", items: { type: "string" } },
           goingUsa:     { type: "string" },
           timezone:     { type: "number" },
         },
-        required: ["pairingDate", "pairingDays", "departure", "destinations"],
+        required: ["pairingDate", "pairingDays", "departure", "destinations", "destinationCodes"],
         additionalProperties: false,
       },
     },
@@ -4493,23 +4517,50 @@ day numbers into full YYYY-MM-DD dates.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 2 — IDENTIFY PAIRING BLOCKS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Pairing blocks are the COLORED or SHADED rectangular cells that span
-one or more days. They represent a work trip away from home base.
+Pairing blocks represent a work trip away from home base. Some rosters
+color them; others (e.g. crew-portal list views like NavBlue/N-OPS) color
+DAYS OFF instead and show real flight duty in plain white rows — colored
+background is a HINT, never the deciding factor. The ONLY reliable test:
 
-What a pairing block looks like:
-• Colored background (blue, green, yellow, orange, teal, etc.)
-• Contains: a pairing number (e.g. "PA 4521", "3421", "WS 201")
-• Contains: airport IATA codes showing the route (e.g. "YYZ LHR", "YVR-LAS-YVR")
-• Contains: departure/arrival times (e.g. "0645", "14:30", "2315")
+  A row/cell is a pairing block IF AND ONLY IF it contains a real,
+  3-LETTER IATA airport code — other than the home base — that is
+  actually part of a route (e.g. next to a flight number, a CI/CO
+  check-in/out time, or another airport code it connects to).
+
+If you cannot point to an actual 3-letter airport code representing a
+genuine destination, it is NOT a pairing, no matter how it's colored,
+how many hours/times are shown, or how "trip-like" it looks. This
+matters most for internal duty/roster-status codes, which are NEVER
+3-letter IATA codes and must NEVER be treated as a destination or have
+one invented for them — common ones include (this list is illustrative,
+not exhaustive — the RULE above is what to apply, not this list):
+  GD, DO, OFF, RD, D/O, FR          = day off / ground day
+  SDO                                = scheduled day off
+  SBY, STB, STBY, RSV, RES, HSBY     = standby / reserve
+  AL, VAC, HOL, LV                   = leave / vacation
+  TRG, TRN, SIM, GRD, OE             = training
+  BO, BOC                            = book off (NOT "Bogota" — BO is 2
+                                        letters, never a real airport code)
+  REA, REAX                          = reserve/reassignment (NOT "Cancun")
+A 2-letter code, or any abbreviation that isn't a real airport 3 days a
+week you could look up on a map, is a duty-status code — never guess a
+"plausible-sounding" city for it. It is far better to correctly emit
+ZERO pairings for a day off than to fabricate one.
+
+What a genuine pairing block/row looks like:
+• Contains a real 3-letter IATA code for a destination (other than home base)
+• Usually also has: a pairing/flight number, CI (check-in) / CO (check-out)
+  times, departure/arrival times
 • May span 1 day (outstation turn) or 2–5+ days (multi-day pairing)
-• The block STARTS on the departure date and ENDS on the return date
-
-What is NOT a pairing block (ignore these):
-• White/empty cells = days off
-• Cells with ONLY codes: DO, OFF, RD, D/O, FR = day off
-• Cells with ONLY: SBY, STB, STBY, RSV, RES, HSBY = standby
-• Cells with ONLY: AL, VAC, HOL, LV = leave/vacation
-• Cells with ONLY: TRG, TRN, SIM, GRD, OE = training
+• In a LIST format (one row per day), a multi-day pairing usually
+  continues across SEVERAL CONSECUTIVE rows with no day-off row in
+  between — e.g. day 1 departs home base, day 2's row starts where day
+  1 left off (same city) and continues the route, day 3 arrives back at
+  home base. Treat this whole run of connected rows as ONE pairing
+  spanning from the first day to the last, not separate 1-day pairings.
+• A banner/divider row saying something like "Extended duty" between two
+  flight rows means the pairing CONTINUES past it, not that it ends —
+  keep merging rows into the same pairing across it.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 3 — EXTRACT DATES FROM EACH PAIRING BLOCK
@@ -4543,11 +4594,28 @@ Inside the pairing block, read any 3-letter IATA airport codes.
 The home base is always the departure on day 1 (provided separately).
 All other airports are destinations or layovers.
 
+Read each code LETTER BY LETTER against the reference table below before
+deciding on a city — don't pattern-match to the first similar-looking
+city that comes to mind. Confusable codes that are frequently misread:
+YOW (Ottawa) is not YYZ (Toronto). YYC (Calgary) is not YYZ/YUL/any US
+airport. YHZ (Halifax) is not YHM (Hamilton). If two codes in the same
+image look near-identical, re-examine both rather than assuming they
+match a code you already used elsewhere in this roster.
+
 Route reading examples:
-  "YYZ LHR YYZ" → destinations: ["London"]  (London Heathrow layover, return home)
-  "YVR-LAX-JFK" → destinations: ["Los Angeles", "New York"]
-  "YUL CDG NRT" → destinations: ["Paris", "Tokyo"]
-  "YYC LAS" → destinations: ["Las Vegas"]
+  "YYZ LHR YYZ" → destinations: ["London"], destinationCodes: ["LHR"]  (London Heathrow layover, return home)
+  "YVR-LAX-JFK" → destinations: ["Los Angeles", "New York"], destinationCodes: ["LAX", "JFK"]
+  "YUL CDG NRT" → destinations: ["Paris", "Tokyo"], destinationCodes: ["CDG", "NRT"]
+  "YYC LAS" → destinations: ["Las Vegas"], destinationCodes: ["LAS"]
+
+"destinationCodes" is REQUIRED and must be the SAME LENGTH as
+"destinations", in the SAME ORDER — the exact 3-letter code you read for
+each city. This is checked automatically: any entry that isn't a real
+3-letter airport code gets discarded, so a fabricated city with no real
+code behind it will be silently dropped. If you cannot back a city name
+with the actual 3-letter code it came from, DO NOT include that city at
+all — a shorter, accurate destinations list beats a longer, partly
+invented one every time.
 
 NEVER include the home base itself in "destinations" — it is the departure
 and implicit return, not a stop. If a 3-letter code is genuinely illegible
@@ -5011,8 +5079,13 @@ Only include pairings with dates on or after today (${today}). Ignore past pairi
 Return ONLY valid JSON with a "pairings" array. If you cannot read the roster clearly, return {"pairings":[]}.`;
 
     const message = await client.messages.create({
-      model: FAST_MODEL,
-      max_tokens: 2000,
+      model: VISION_MODEL,
+      // 4000, not 2000 — a full 31-day roster with several multi-day
+      // pairings plus the new destinationCodes field genuinely needs more
+      // room, and VISION_MODEL (Sonnet) is more verbose than Haiku was.
+      // Confirmed live 2026-07-22: the real roster test above hit the old
+      // 2000-token cap exactly and got cut off mid-JSON.
+      max_tokens: 4000,
       output_config: { format: { type: "json_schema", schema: ROSTER_SCHEMA } },
       messages: [{ role: "user", content: [...imageContent, { type: "text", text: prompt }] }],
     });
@@ -5032,6 +5105,36 @@ Return ONLY valid JSON with a "pairings" array. If you cannot read the roster cl
         const dep = p.departure.trim().toLowerCase();
         p.destinations = p.destinations.filter(d => (d || "").trim().toLowerCase() !== dep);
       }
+    }
+    // Deterministic safety net #2: any destination not backed by a real
+    // 3-letter IATA code (destinationCodes, required by ROSTER_SCHEMA) is
+    // dropped. Confirmed live 2026-07-22: the model reliably fabricates a
+    // plausible-sounding city (Grenada, Bogota, Godthab, Cancun,
+    // Yellowknife) from 2-4 letter internal duty-status codes (GD, BO,
+    // REAX) shown in colored "day off" rows, even when the prompt
+    // explicitly forbids guessing — this is checked in code because
+    // prompting alone was not reliable enough to stop it. A pairing left
+    // with zero destinations after filtering was never a real trip (the
+    // whole block was hallucinated from a duty-status code, not an actual
+    // flight) — drop it entirely rather than serve a day-off as a trip.
+    const IATA_CODE_PATTERN = /^[A-Z]{3}$/;
+    if (Array.isArray(result?.pairings)) {
+      result.pairings = result.pairings.filter(p => {
+        if (!Array.isArray(p.destinations)) return true;
+        const codes = Array.isArray(p.destinationCodes) ? p.destinationCodes : [];
+        const kept = [];
+        const droppedCities = [];
+        p.destinations.forEach((city, i) => {
+          if (IATA_CODE_PATTERN.test((codes[i] || "").trim().toUpperCase())) kept.push(city);
+          else droppedCities.push(`${city} (code="${codes[i] || ""}")`);
+        });
+        if (droppedCities.length) {
+          console.warn(`[roster-parse] dropped unverified destination(s) for pairing ${p.pairingDate}: ${droppedCities.join(", ")}`);
+        }
+        p.destinations = kept;
+        delete p.destinationCodes;
+        return p.destinations.length > 0;
+      });
     }
     res.json(result);
   } catch (err) {
