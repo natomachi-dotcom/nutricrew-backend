@@ -383,6 +383,24 @@ console.log("\n=== G. Customs (carried food) ===");
   check("airplane_provided meals exempt from customs check", !airplane);
   const noBorders = findMealCustomsViolation(meal({ ingredients: ing("raw chicken") }), []);
   check("no restricted borders -> no customs check at all", !noBorders);
+
+  // Regression: live verification (2026-07-22) found "orange juice" (and
+  // "orange juice, commercially packaged") repeatedly BLOCKed as carried
+  // fresh fruit — juice is a processed, typically shelf-stable/pasteurized
+  // liquid product, not the whole fresh fruit the ban is actually about.
+  const orangeJuice = findMealCustomsViolation(meal({ ingredients: ing("scrambled eggs", "orange juice"), tip: "pack for the flight" }), border);
+  check('"orange juice" is not flagged as carried fresh fruit', !orangeJuice, JSON.stringify(orangeJuice));
+
+  // Regression: the prompt explicitly instructs the model to label carried
+  // items "commercially packaged"/"commercially sealed" — that exact
+  // phrasing wasn't recognized as a shelf-stable qualifier, so a genuinely
+  // compliant item still failed.
+  const commerciallyPackagedApple = findMealCustomsViolation(meal({ ingredients: ing("commercially packaged dried apple slices") }), border);
+  check('"commercially packaged" is recognized as a shelf-stable qualifier', !commerciallyPackagedApple, JSON.stringify(commerciallyPackagedApple));
+
+  // But a genuine whole fresh fruit (no qualifier) must still be caught.
+  const freshBanana = findMealCustomsViolation(meal({ ingredients: ing("banana", "granola") }), border);
+  check('a genuine whole "banana" (no qualifier) is STILL flagged', !!freshBanana, JSON.stringify(freshBanana));
 }
 
 // ── D/E full-day: calories + budget ──────────────────────────────────────

@@ -11,7 +11,7 @@ const {
   validatePlan, findMealSlotContentViolation, findMealPortionScaleViolation,
   findMealTitleViolation, findMealIconViolation, getMealHeroCategory,
   findCrossDayVarietyViolations, titlesShareSignificantPattern,
-  findMealAllergenViolations, ALLERGEN_DERIVATIVES, deterministicTitleFix,
+  findMealAllergenViolations, ALLERGEN_DERIVATIVES, deterministicTitleFix, deterministicFodmapGarlicFix,
 } = await import("./server.js");
 
 let passed = 0;
@@ -169,6 +169,35 @@ console.log("\n=== Normal meals pass every check ===");
   const otherViolation = { ruleId: "kitchen_access", detail: "wrong prep_method" };
   const notFixed = deterministicTitleFix({ name: "Tuna Salad with Gluten-Free Crackers" }, [titleOnlyViolation, otherViolation]);
   check("deterministicTitleFix declines when OTHER violations are also present", notFixed === null, JSON.stringify(notFixed));
+
+  // Regression: live verification (2026-07-22) found fodmap garlic/onion the
+  // single most persistent repair failure in production — even a
+  // strengthened prompt AND a directive repair message didn't reliably stop
+  // the model from reaching for it again on the next attempt.
+  // deterministicFodmapGarlicFix strips the word out directly instead of
+  // gambling a third regeneration on model compliance, when it's the ONLY
+  // remaining problem.
+  const garlicViolation = { ruleId: "diet_compliance", dietTag: "fodmap", detail: "garlic" };
+  const garlicMeal = {
+    name: "Rotisserie Chicken with Garlic Rice",
+    description: "Rotisserie chicken with garlic rice and carrots.",
+    tip: "Buy locally and consume before next flight.",
+    ingredients: [{ name: "rotisserie chicken" }, { name: "garlic" }, { name: "rice" }, { name: "carrots" }],
+  };
+  const garlicFixed = deterministicFodmapGarlicFix(garlicMeal, [garlicViolation]);
+  check("deterministicFodmapGarlicFix removes garlic from ingredients", !garlicFixed.ingredients.some(i => /garlic/i.test(i.name)), JSON.stringify(garlicFixed?.ingredients));
+  check("deterministicFodmapGarlicFix strips garlic from name/description", !/garlic/i.test(garlicFixed.name) && !/garlic/i.test(garlicFixed.description), JSON.stringify(garlicFixed));
+
+  const onionViolation = { ruleId: "diet_compliance", dietTag: "fodmap", detail: "onion" };
+  const onionFixed = deterministicFodmapGarlicFix({ name: "Beef Stew", ingredients: [{ name: "beef" }, { name: "onion" }] }, [onionViolation]);
+  check("deterministicFodmapGarlicFix also handles onion", !onionFixed.ingredients.some(i => /onion/i.test(i.name)), JSON.stringify(onionFixed?.ingredients));
+
+  const otherDietViolation = { ruleId: "diet_compliance", dietTag: "fodmap", detail: "honey" };
+  const notGarlicFixed = deterministicFodmapGarlicFix({ name: "Yogurt with Honey" }, [otherDietViolation]);
+  check("deterministicFodmapGarlicFix declines for a non-garlic/onion fodmap violation", notGarlicFixed === null, JSON.stringify(notGarlicFixed));
+
+  const garlicPlusOther = deterministicFodmapGarlicFix(garlicMeal, [garlicViolation, { ruleId: "kitchen_access", detail: "wrong prep_method" }]);
+  check("deterministicFodmapGarlicFix declines when OTHER violations are also present", garlicPlusOther === null, JSON.stringify(garlicPlusOther));
 }
 
 // ── Hero classification + title-pattern matching ──────────────────────────

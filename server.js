@@ -1337,11 +1337,16 @@ function findMealKitchenViolation(meal, kitchenList) {
 // meal is exempt if its own tip matches the "buy locally / consume before
 // next flight" phrasing the prompt already instructs the model to use for
 // same-stop, non-carried meals (see buildCarriedFoodPromptBlock).
+// "___ juice" excluded from the fruit-name group — orange/apple/grape juice
+// are processed, typically shelf-stable/pasteurized liquid products, not
+// the whole fresh fruit the ban is actually about. Confirmed live
+// 2026-07-22: "orange juice" and "orange juice, commercially packaged"
+// both still tripped this ban and survived a repair attempt unresolved.
 const CARRIED_BAN_CATEGORY_PATTERNS = [
   /\bfresh (fruit|vegetables?|produce)\b/i,
   // "peach(?:es)?" not "peaches?" — the latter only matches "peache"/"peaches",
   // never singular "peach" (the "?" only makes the trailing "s" optional).
-  /\b(apples?|oranges?|mangoe?s?|bananas?|grapes?|berr(?:y|ies)|peach(?:es)?|pears?)\b/i,
+  /\b(apples?|oranges?|mangoe?s?|bananas?|grapes?|berr(?:y|ies)|peach(?:es)?|pears?)\b(?!\s+juice)/i,
   /\braw (chicken|beef|pork|meat|fish|eggs?)\b/i,
   /\b(uncooked|unpasteurized) (meat|dairy|milk|cheese)\b/i,
 ];
@@ -1352,7 +1357,11 @@ const LOCALLY_PURCHASED_TIP_PATTERN = /buy locally|consume before|do not pack|ea
 // light syrup" is exactly what it's supposed to produce, not a violation.
 // Production 504: this false positive triggered an unnecessary repair round
 // that pushed a real request over Vercel's function timeout.
-const SHELF_STABLE_QUALIFIER = /\b(canned|tinned|dried|dehydrated|jarred|vacuum-sealed|shelf-stable|freeze-dried|preserved|pickled)\b/i;
+// "commercially packaged/sealed", "pasteurized", "boxed", "bottled" added
+// 2026-07-22 — the model was using this EXACT phrasing (as the prompt
+// itself instructs) but it wasn't recognized as a qualifier, so a
+// genuinely compliant "orange juice, commercially packaged" still failed.
+const SHELF_STABLE_QUALIFIER = /\b(canned|tinned|dried|dehydrated|jarred|vacuum-sealed|shelf-stable|freeze-dried|preserved|pickled|commercially packaged|commercially sealed|pasteurized|boxed|bottled)\b/i;
 
 function findMealCustomsViolation(meal, restrictedBorders, kitchenList) {
   if (!restrictedBorders || restrictedBorders.length === 0) return null;
@@ -1548,7 +1557,12 @@ const WALL_RULES = [
       const v = findMealCustomsViolation(meal, ruleCtx.restrictedBorders, ruleCtx.kitchenList);
       return { pass: !v, violations: v ? [v] : [] };
     },
-    message: (v) => v.detail,
+    // Live verification (2026-07-22) found customs repairs failing to
+    // converge across multiple unrelated diets — the model kept reaching
+    // for fresh banana/apple/orange juice again on the very next repair
+    // attempt because the bare v.detail only restated the problem, never
+    // naming a fix. Same fix class as kitchen_access/title_quality.
+    message: (v) => `${v.detail}. Either swap in a commercially packaged/canned/dried/shelf-stable version of this exact food, replace it with a different already-shelf-stable ingredient entirely, or — if it's actually prepared and eaten at the current stop, not carried onward — say so explicitly in the tip ("buy locally, consume before next flight").`,
   },
   // NEW — the model now self-declares hero_ingredient (see MEAL_SCHEMA); this
   // rule independently infers a hero via the same regex table used for
@@ -1884,7 +1898,7 @@ function describeMealViolation(v) {
     case "KITCHEN": return v.allowedMethods
       ? `${v.detail}. Rebuild this meal (different dish if needed) with prep_method set to exactly one of: ${v.allowedMethods.join(", ")} — no other value is achievable with this kitchen access.`
       : v.detail;
-    case "CUSTOMS": return v.detail;
+    case "CUSTOMS": return `${v.detail}. Either swap in a commercially packaged/canned/dried/shelf-stable version of this exact food, replace it with a different already-shelf-stable ingredient entirely, or — if it's actually prepared and eaten at the current stop, not carried onward — say so explicitly in the tip ("buy locally, consume before next flight").`;
     default: return v.detail;
   }
 }
@@ -1939,6 +1953,39 @@ function deterministicTitleFix(meal, violations) {
     return { ...meal, name: violations[0].suggestedName };
   }
   return null;
+}
+
+// FODMAP garlic/onion is the single most persistent repair failure in
+// production — even a strengthened initial prompt (explicit "check every
+// seasoning blend" warning) AND a directive repair message (use garlic-
+// infused oil / scallion greens instead) don't reliably stop the model
+// from reaching for it again on the very next attempt. Confirmed live
+// 2026-07-22: "Rotisserie/Grilled Chicken with Rice" style meals kept
+// failing on "garlic" across repeated attempts and a strengthened prompt.
+// When it's the ONLY remaining problem, strip the word out of the
+// ingredient list and text fields directly — garlic/onion is a minor
+// seasoning ingredient, not a hero, so removing it doesn't break the dish
+// the way stripping a main protein would.
+function deterministicFodmapGarlicFix(meal, violations) {
+  if (violations.length !== 1) return null;
+  const v = violations[0];
+  if (v.ruleId !== "diet_compliance" || v.dietTag !== "fodmap" || !/\b(garlic|onions?)\b/i.test(v.detail)) return null;
+  // Non-global pattern for .test() — a shared global regex's lastIndex
+  // state would corrupt repeated .test() calls across different ingredient
+  // strings in the filter below. stripWord's inline /gi literal is safe
+  // since a fresh RegExp is instantiated on every call.
+  const testPattern = /\b(garlic|onions?)\b/i;
+  const stripWord = (text) => (text ? text.replace(/\b(garlic|onions?)\b/gi, "").replace(/\s{2,}/g, " ").replace(/\s+([,.])/g, "$1").trim() : text);
+  return {
+    ...meal,
+    ingredients: (meal.ingredients || []).filter(i => {
+      const n = typeof i === "string" ? i : i?.name;
+      return !(n && testPattern.test(n));
+    }),
+    name: stripWord(meal.name),
+    description: stripWord(meal.description),
+    tip: stripWord(meal.tip),
+  };
 }
 
 // Mifflin-St Jeor TDEE estimate for calorie deficit target.
@@ -2119,6 +2166,7 @@ function getSingleDietBlock(diet, calorieTarget, data) {
     case "fodmap":
       return `DIET: LOW-FODMAP — STRICT RULES:
 - NO high-FODMAP foods: onion, garlic, wheat, most legumes/beans, apples, pears, mango, watermelon, honey, high-fructose corn syrup, milk/soft cheese, cashews, pistachios.
+- GARLIC/ONION ARE BANNED IN EVERY FORM — this is the single most common mistake, so check for it explicitly every time: garlic powder, onion powder, granulated garlic, and pre-made seasoning blends/marinades/rotisserie-chicken seasoning/canned soups/jarred sauces almost always contain garlic and/or onion by default. Don't just avoid whole garlic cloves — verify every seasoning, sauce, and "seasoned"/"marinated" ingredient by name.
 - YES: most meat/fish/eggs, rice, quinoa, oats, potatoes, most hard cheeses, lactose-free dairy, firm tofu, low-FODMAP veg (carrots, zucchini, spinach, bell peppers, tomatoes) and fruit (banana, grapes, oranges, strawberries, blueberries).
 - Use garlic-infused oil (not garlic itself) and the green tops of scallions (not onion) for allium flavor.
 - Note this is typically a temporary elimination-phase diet — add a tip suggesting the crew member confirm current tolerance for any borderline item.`;
@@ -3883,7 +3931,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
             }
             const newMeals = await Promise.all(meals.map(async (meal, i) => {
               if (!byIndex.has(i)) return meal;
-              const deterministic = deterministicTitleFix(meal, byIndex.get(i));
+              const deterministic = deterministicTitleFix(meal, byIndex.get(i)) || deterministicFodmapGarlicFix(meal, byIndex.get(i));
               if (deterministic) return deterministic;
               const fixed = await regenerateMealForViolations(meal, byIndex.get(i), dayCtx.dietRules, dayCtx.kitchenAccessBlock, buildCarriedFoodPromptBlock(dayCtx.restrictedBorders));
               return fixed || meal;
@@ -4024,7 +4072,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           // days failed purely because the heuristic hero-ingredient bucket
           // disagreed with a genuinely correct model answer.
           blockingStillBad = stillBad.filter(sv => sv.severity !== "WARN");
-          const deterministic = deterministicTitleFix(replacement, blockingStillBad);
+          const deterministic = deterministicTitleFix(replacement, blockingStillBad) || deterministicFodmapGarlicFix(replacement, blockingStillBad);
           if (deterministic) { replacement = deterministic; blockingStillBad = []; }
           if (blockingStillBad.length === 0) break;
           currentViolations = blockingStillBad;
@@ -4258,7 +4306,7 @@ app.post("/api/regenerate-meal", apiLimiter, async (req, res) => {
       });
       for (const v of wallViolations) logWallViolation({ ...v, day: null, mealType: replacement.type, mealName: replacement.name, attempt, source: "regenerate-meal" });
       blocking = wallViolations.filter(v => v.severity !== "WARN");
-      const deterministic = deterministicTitleFix(replacement, blocking);
+      const deterministic = deterministicTitleFix(replacement, blocking) || deterministicFodmapGarlicFix(replacement, blocking);
       if (deterministic) { replacement = deterministic; blocking = []; }
       if (blocking.length === 0) break;
       currentViolations = blocking;
@@ -5456,6 +5504,6 @@ export {
   BORDER_COUNTRY_RULES, getCountryForAirport, detectRestrictedBorders,
   getDestinationFoodRules, unionCarriedBans, extractAirportCode,
   buildCarriedFoodNote, buildCustomsByCountry, buildKitchenAccessBlock,
-  deterministicTitleFix,
+  deterministicTitleFix, deterministicFodmapGarlicFix,
 };
 export default app;
