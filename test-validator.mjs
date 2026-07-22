@@ -125,6 +125,80 @@ console.log("\n=== A. Allergen derivative matching ===");
 
   const noAddedWheatQualified = findMealAllergenViolations(meal({ name: "Rice Cakes with Almond Butter", ingredients: ing("rice cakes", "almond butter (natural, no added sugar or wheat)") }), new Set(["wheat_gluten"]), "");
   check('"no added sugar or wheat" negation phrase is not flagged as wheat_gluten', noAddedWheatQualified.length === 0, JSON.stringify(noAddedWheatQualified));
+
+  // Regression: live verification (2026-07-20, broad diet/kitchen matrix)
+  // found the self-report contradiction check itself too narrow — it only
+  // caught "matched but qualifier-exempted" ingredients, not "exempted via
+  // the corn/rice lookbehind and never matched the strict pattern at all".
+  // "gluten-free corn tortilla" still tripped a wheat_gluten self-report
+  // BLOCK because patternMatches was empty (the strict pattern's own
+  // corn/rice exemption meant it never matched to begin with).
+  const cornTortillaSelfReport = findMealAllergenViolations(
+    meal({ name: "Canned Tuna Salad Wrap", ingredients: ing("canned tuna", "gluten-free mayonnaise", "gluten-free corn tortilla"), allergens_present: ["fish", "eggs", "wheat_gluten"] }),
+    new Set(["wheat_gluten"]), ""
+  );
+  check('self-reported wheat_gluten contradicted by "gluten-free corn tortilla" is NOT flagged', cornTortillaSelfReport.length === 0, JSON.stringify(cornTortillaSelfReport));
+
+  // Regression: bare "milk"/"yogurt" had no plant-based exemption at all —
+  // "oat milk", "unsweetened almond milk", "coconut milk (canned)", and
+  // "coconut yogurt" were all BLOCKed as dairy for a dairy-free user, even
+  // though every one of them is the correct, safe choice for that exact
+  // restriction. Confirmed live 2026-07-20 across multiple dairy_free runs.
+  const oatMilk = findMealAllergenViolations(meal({ name: "Oatmeal with Berries", ingredients: ing("oats", "oat milk", "berries") }), new Set(["milk"]), "");
+  check('"oat milk" is not flagged as milk', oatMilk.length === 0, JSON.stringify(oatMilk));
+
+  const almondMilk = findMealAllergenViolations(meal({ name: "Oatmeal with Banana", ingredients: ing("oats", "unsweetened almond milk") }), new Set(["milk"]), "");
+  check('"unsweetened almond milk" is not flagged as milk', almondMilk.length === 0, JSON.stringify(almondMilk));
+
+  const coconutMilk = findMealAllergenViolations(meal({ name: "Curry with Rice", ingredients: ing("vegetables", "coconut milk (canned, full-fat)", "rice") }), new Set(["milk"]), "");
+  check('"coconut milk (canned, full-fat)" is not flagged as milk', coconutMilk.length === 0, JSON.stringify(coconutMilk));
+
+  const coconutYogurt = findMealAllergenViolations(meal({ name: "Coconut Yogurt with Granola", ingredients: ing("coconut yogurt (shelf-stable or refrigerated)", "granola") }), new Set(["milk"]), "");
+  check('"coconut yogurt" is not flagged as milk', coconutYogurt.length === 0, JSON.stringify(coconutYogurt));
+
+  // But real dairy milk/yogurt (no plant qualifier) must still be caught.
+  const realMilk = findMealAllergenViolations(meal({ name: "Cereal with Milk", ingredients: ing("cereal", "milk") }), new Set(["milk"]), "");
+  check('unqualified "milk" is STILL flagged', realMilk.length > 0, JSON.stringify(realMilk));
+
+  const realYogurt = findMealAllergenViolations(meal({ name: "Greek Yogurt with Honey", ingredients: ing("greek yogurt", "honey") }), new Set(["milk"]), "");
+  check('unqualified "greek yogurt" is STILL flagged', realYogurt.length > 0, JSON.stringify(realYogurt));
+
+  // Regression: the diet rules explicitly instruct the model to write a
+  // cross-contamination warning in the tip for allergen-adjacent items —
+  // the resulting advisory sentence ("verify no sesame cross-contact")
+  // mentions the allergen word but is a SAFETY REMINDER, not a stated
+  // ingredient. Confirmed live 2026-07-20: 6/6 sesame_free test runs BLOCKed
+  // a genuinely sesame-free meal purely because its own tip said "sesame"
+  // in a verification sentence.
+  const crossContactAdvisory = findMealAllergenViolations(
+    meal({ name: "Scrambled Eggs with Toast", ingredients: ing("eggs", "bread", "butter"), tip: "Hotel may provide butter and jam packets — confirm no sesame-containing ingredients." }),
+    new Set(["sesame"]), ""
+  );
+  check('a cross-contamination advisory mentioning "sesame" is not flagged as an ingredient', crossContactAdvisory.length === 0, JSON.stringify(crossContactAdvisory));
+
+  // But a genuine sesame mention with no advisory framing must still be caught.
+  const realSesame = findMealAllergenViolations(meal({ name: "Hummus Plate", description: "Chickpea hummus with tahini and sesame seeds on top.", ingredients: ing("chickpeas", "tahini") }), new Set(["sesame"]), "");
+  check('a genuine sesame mention (no cross-contamination framing) is STILL flagged', realSesame.length > 0, JSON.stringify(realSesame));
+
+  // Regression: the negation-window check above still missed several real
+  // advisory phrasings the model actually used live ("avoid cross-contact
+  // with shellfish-handling surfaces", "your shellfish allergy does not
+  // affect this snack", "given your shellfish allergy profile") — none
+  // state the meal contains the allergen, they're all restating the user's
+  // OWN restriction back at them, in the tip field specifically (which the
+  // diet rules explicitly reserve for exactly this kind of advisory). The
+  // free-text scan now excludes tip entirely rather than chasing every
+  // possible negation phrasing.
+  const tipAdvisoryPhrasing = findMealAllergenViolations(
+    meal({ name: "Mixed Nuts & Dried Fruit", description: "A simple blend of roasted almonds, cashews, and dried cranberries.", ingredients: ing("almonds", "cashews", "dried cranberries"), tip: "Watch for tree_nuts allergen if you have any sensitivity; your shellfish allergy does not affect this snack." }),
+    new Set(["shellfish"]), ""
+  );
+  check("tip-only advisory phrasing (not caught by negation window) is not flagged", tipAdvisoryPhrasing.length === 0, JSON.stringify(tipAdvisoryPhrasing));
+
+  // But a genuine allergen stated in the DESCRIPTION (not just the tip) must
+  // still be caught — only tip is excluded, not description/name.
+  const realShellfishInDescription = findMealAllergenViolations(meal({ name: "Seafood Pasta", description: "Pasta tossed with shrimp and scallops in garlic butter.", ingredients: ing("pasta", "shrimp", "scallops") }), new Set(["shellfish"]), "");
+  check("shellfish stated in description is STILL flagged", realShellfishInDescription.length > 0, JSON.stringify(realShellfishInDescription));
 }
 
 // ── C. Diet compliance ──────────────────────────────────────────────────

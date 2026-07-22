@@ -702,7 +702,15 @@ const ALLERGEN_DERIVATIVES = {
   // verification found "Chicken Caesar Wrap ... parmesan" passing a
   // dairy-allergy check clean. Added explicitly rather than relying on the
   // generic word.
-  milk: /\b(milk|buttermilk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|cocoa|cacao|shea|sunflower|apple|nut|seed)\s)butter|cheeses?|parmesan|cheddar|mozzarella|brie|feta|gouda|provolone|camembert|gruy[eè]re|halloumi|manchego|goat cheese|cream cheese|cottage cheese|blue cheese|yogh?urt|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half)\b/i,
+  // "milk" and "yogh?urt" exclude a plant-based qualifier right before them
+  // (coconut, oat, almond, soy, cashew, rice, hemp, pea, macadamia) — those
+  // are common, everyday dairy-free staples, not dairy in disguise, unlike
+  // bare "milk"/"yogurt" which defaults to dairy. Confirmed live 2026-07-20:
+  // "oat milk", "unsweetened almond milk", "coconut milk (canned)", and
+  // "coconut yogurt" were all BLOCKed as milk allergens for a dairy-free
+  // user with zero repair chance — every one of them was the CORRECT,
+  // safe choice for that exact restriction.
+  milk: /\b(buttermilk|creams?|(?<!(?:peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia|cocoa|cacao|shea|sunflower|apple|nut|seed|coconut)\s)butter|cheeses?|parmesan|cheddar|mozzarella|brie|feta|gouda|provolone|camembert|gruy[eè]re|halloumi|manchego|goat cheese|cream cheese|cottage cheese|blue cheese|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half)\b|(?<!(?:coconut|oat|almond|soy|cashew|rice|hemp|pea|macadamia)[- ])\b(milk|yogh?urts?)\b/i,
   eggs: /\b(eggs?|egg whites?|egg yolks?|albumin|albumen|ovalbumin|mayonnaise|mayo|hollandaise|b[ée]arnaise|meringue|frittata|quiche|french toast|egg wash|aioli)\b/i,
   fish: /\b(fish|anchov(?:y|ies)|fish sauce|worcestershire(?: sauce)?|bonito|dashi|salmon|tuna|cod|tilapia|sardines?|surimi|imitation crab)\b/i,
   shellfish: /\b(shrimps?|prawns?|crabs?|lobsters?|crayfish|crawfish|clams?|mussels?|oysters?|scallops?|squid|octopus|calamari|shellfish|oyster sauce|shrimp paste)\b/i,
@@ -754,6 +762,44 @@ const ALLERGEN_SELF_LABEL_QUALIFIER = {
   sesame: /sesame-free|tahini-free/i, shellfish: /shellfish-free/i, fish: /fish-free/i,
 };
 
+// Loose, lookbehind-free version of ALLERGEN_DERIVATIVES for the two tags
+// (wheat_gluten, milk) whose pattern has a "safe qualifier right before it"
+// exemption baked in as a negative lookbehind (corn/rice tortillas, plant
+// milks/yogurts) — those exemptions mean a genuinely safe ingredient like
+// "gluten-free corn tortilla" produces ZERO matches against the strict
+// pattern at all, not a "matched but qualified" case. Used ONLY to judge
+// whether a self-reported allergen tag is corroborated/contradicted by the
+// ingredient list (see findMealAllergenViolations below) — the strict
+// pattern + qualifier stay authoritative for actual pass/fail everywhere
+// else. Confirmed live 2026-07-20: "gluten-free corn tortilla" still
+// tripped a wheat_gluten self-report BLOCK because the strict pattern's
+// corn/rice lookbehind meant patternMatches never saw it at all.
+const ALLERGEN_CATEGORY_HINT = {
+  wheat_gluten: /\b(wheat|flour|breads?|breadcrumbs?|panko|pasta|semolina|couscous|seitan|bulgur|farro|spelt|barley|rye|malt|soy sauce|noodles?|crackers?|tortillas?)\b/i,
+  milk: /\b(buttermilk|creams?|butter|cheeses?|parmesan|cheddar|mozzarella|brie|feta|gouda|provolone|camembert|gruy[eè]re|halloumi|manchego|goat cheese|cream cheese|cottage cheese|blue cheese|whey|caseinates?|casein|lactose|ghee|custard|gelato|ricotta|mascarpone|paneer|quark|curds?|milk powder|milk solids|condensed milk|evaporated milk|half-and-half|milk|yogh?urts?)\b/i,
+};
+
+// The diet rules explicitly instruct the model to write a cross-
+// contamination/safety-check warning in the tip for allergen-adjacent items
+// (e.g. "Add a cross-contamination warning in the tip for any seafood...
+// item" for shellfish_free, similar wording for nut_free/sesame_free) — the
+// resulting advisory sentence ("confirm no sesame-containing ingredients",
+// "verify no sesame or sesame-oil in dressing") mentions the allergen word
+// as part of a NEGATION, not a stated ingredient, but the bare free-text
+// scan can't tell the difference. Confirmed live 2026-07-20: 6/6
+// sesame_free test runs BLOCKed a genuinely sesame-free meal purely because
+// its own dutifully-written tip said "sesame" in a verification sentence
+// ("Scrambled Eggs with Toast" had zero sesame ingredients — the tip just
+// said "confirm no sesame-containing ingredients"). Checked as "a negation
+// word appears shortly before the match" — the same technique already used
+// for wheat_gluten's "no ... wheat" qualifier, generalized here to the
+// free-text scan for every tag. Only applied to the free-text scan
+// (ingredients are discrete data and don't get this advisory phrasing).
+function hasNegationBeforeMatch(text, matchIndex) {
+  const before = text.slice(Math.max(0, matchIndex - 40), matchIndex);
+  return /\b(no|not|without|free of|zero)\b/i.test(before);
+}
+
 function getUserRequiredAllergenAvoidance(data) {
   const rawDiets = Array.isArray(data.diets) ? data.diets : (data.diet ? [data.diet] : []);
   const tags = new Set();
@@ -802,10 +848,16 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
       // dominant cause of "Day X couldn't be generated": BLOCK severity never
       // gets a repair chance, so one careless self-report tag killed the
       // whole day outright. Only trust the self-report when the ingredient
-      // list gives it no qualified explanation to contradict — that's still
-      // how a genuinely hidden/derivative allergen (e.g. Worcestershire ->
-      // fish, not spelled out as a discrete ingredient) keeps getting caught.
-      if (patternMatches.length > 0) continue;
+      // list gives it no explanation to contradict — checked via the loose
+      // category hint (falls back to the strict pattern for tags with no
+      // hint entry) so a corn/rice-exempted tortilla or a plant-milk/yogurt
+      // still counts as "explained", not just a qualifier-exempted match.
+      // That's still how a genuinely hidden/derivative allergen (e.g.
+      // Worcestershire -> fish, not spelled out as a discrete ingredient)
+      // keeps getting caught.
+      const hint = ALLERGEN_CATEGORY_HINT[tag];
+      const hasIngredientExplanation = hint ? ingredientNames.some(n => hint.test(n)) : patternMatches.length > 0;
+      if (hasIngredientExplanation) continue;
       violations.push({ code: "ALLERGEN", tag, source: "self_report", detail: `model self-reported allergens_present includes "${tag}"` });
       continue;
     }
@@ -817,11 +869,24 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
     // Crackers") is just that same already-cleared ingredient, not a newly
     // discovered hidden allergen — verification found "Rice Crackers" tripping
     // this exact false positive via its own name.
+    // Deliberately excludes meal.tip — the diet rules explicitly instruct
+    // the model to write cross-contamination/logistics advisories INTO the
+    // tip field ("Add a cross-contamination warning in the tip..."), so tip
+    // content is systematically about safety verification, not stated dish
+    // content. Confirmed live 2026-07-20: even with the negation-window
+    // check above, tip phrasings kept slipping through in shapes it didn't
+    // catch ("avoid cross-contact with shellfish-handling surfaces", "your
+    // shellfish allergy does not affect this snack", "given your shellfish
+    // allergy profile") — none of these state the meal contains shellfish,
+    // they're all restating the user's OWN restriction back at them. A
+    // genuine hidden allergen (e.g. Worcestershire -> fish) would still show
+    // up in name/description, which describe the dish itself.
     if (patternMatches.length === 0) {
-      const text = [meal.name, meal.description, meal.tip].filter(Boolean).join(" ");
+      const text = [meal.name, meal.description].filter(Boolean).join(" ");
       const match = text.match(pattern);
       if (match) {
         if (qualifier && qualifier.test(text)) continue;
+        if (hasNegationBeforeMatch(text, match.index)) continue;
         violations.push({ code: "ALLERGEN", tag, source: "text", detail: match[0] });
       }
     }
@@ -832,7 +897,7 @@ function findMealAllergenViolations(meal, requiredTags, customAllergyTerm) {
     // full stemming, but cheap insurance against the most common miss.
     const re = new RegExp(`\\b${escapeRegExp(customAllergyTerm)}s?\\b`, "i");
     const ingHit = ingredientNames.find(n => re.test(n));
-    const text = [meal.name, meal.description, meal.tip].filter(Boolean).join(" ");
+    const text = [meal.name, meal.description].filter(Boolean).join(" ");
     const match = ingHit ? [ingHit] : text.match(re);
     if (match) violations.push({ code: "ALLERGEN", tag: "allergy_other", source: ingHit ? "ingredient" : "text", detail: match[0] });
   }
@@ -1326,6 +1391,37 @@ function computeMealCost(meal) {
 //            sparingly — currently only hero_ingredient_agreement, since the
 //            independent-inference check is heuristic and can disagree with
 //            a genuinely correct model answer.
+// Two specific carnivore traps, and three specific vegan traps, get a
+// concrete substitution instruction instead of the generic message —
+// confirmed live 2026-07-20 that a prose warning several paragraphs up in
+// the diet rules wasn't reliably stopping the model from reaching for
+// "beef jerky" (usually sugared) / oil-packed canned fish / butter / egg /
+// dairy again on the VERY NEXT repair attempt for the SAME meal; naming the
+// exact fix at the point of the violation is far more directive than a
+// general rule stated once, up front. Shared between the WALL_RULES
+// message() (used when validateDay pre-computes wallMessage) and
+// describeMealViolation's DIET fallback (used by the cross-day-repair and
+// /api/regenerate-meal paths, which call runWallOnMeal directly and never
+// get a wallMessage attached).
+function describeDietViolation(v) {
+  if (v.dietTag === "carnivore" && /sugar/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "carnivore" diet rule — retail beef jerky/dried meat almost always has added sugar in the cure. Replace with "sugar-free beef jerky" or "unsweetened dried beef" explicitly, or swap to a different protein entirely (canned meat/fish, cheese, hard-boiled eggs).`;
+  }
+  if (v.dietTag === "carnivore" && /olive oil|vegetable oil|oil\b/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "carnivore" diet rule — canned fish packed in olive/vegetable oil is not carnivore-compliant. Specify fish packed in water (drained) instead, or fish packed in its own oil/broth, or add the fat separately as butter/tallow.`;
+  }
+  if (v.dietTag === "vegan" && /\bbutter\b/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "vegan" diet rule. Replace with "vegan butter" or "plant-based margarine" explicitly, or use olive/coconut oil instead.`;
+  }
+  if (v.dietTag === "vegan" && /\begg/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "vegan" diet rule. Replace the egg entirely — use a tofu scramble, chickpea flour ("besan") scramble, or commercial egg replacer, not a real egg in any form.`;
+  }
+  if (v.dietTag === "vegan" && /\b(cheese|milk|cream|yogh?urt)\b/i.test(v.detail)) {
+    return `Contains "${v.detail}" which violates the "vegan" diet rule. Replace with the named plant-based alternative explicitly (e.g. "vegan cheese"/"nutritional yeast", "oat milk"/"almond milk", "coconut cream", "coconut yogurt") — never the real dairy version.`;
+  }
+  return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
+}
+
 const WALL_RULES = [
   {
     id: "no_allergens",
@@ -1347,22 +1443,7 @@ const WALL_RULES = [
       const violations = findMealDietViolations(meal, ruleCtx.activeDietTags);
       return { pass: violations.length === 0, violations };
     },
-    // Two specific carnivore traps get a concrete substitution instruction
-    // instead of the generic message — confirmed live 2026-07-20 that a
-    // prose warning several paragraphs up in the diet rules wasn't reliably
-    // stopping the model from reaching for "beef jerky" (usually sugared)
-    // or oil-packed canned fish again on the VERY NEXT repair attempt for
-    // the SAME meal; naming the exact fix at the point of the violation is
-    // far more directive than a general rule stated once, up front.
-    message: (v) => {
-      if (v.dietTag === "carnivore" && /sugar/i.test(v.detail)) {
-        return `Contains "${v.detail}" which violates the "carnivore" diet rule — retail beef jerky/dried meat almost always has added sugar in the cure. Replace with "sugar-free beef jerky" or "unsweetened dried beef" explicitly, or swap to a different protein entirely (canned meat/fish, cheese, hard-boiled eggs).`;
-      }
-      if (v.dietTag === "carnivore" && /olive oil|vegetable oil|oil\b/i.test(v.detail)) {
-        return `Contains "${v.detail}" which violates the "carnivore" diet rule — canned fish packed in olive/vegetable oil is not carnivore-compliant. Specify fish packed in water (drained) instead, or fish packed in its own oil/broth, or add the fat separately as butter/tallow.`;
-      }
-      return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
-    },
+    message: describeDietViolation,
   },
   {
     id: "meal_slot_appropriateness",
@@ -1754,7 +1835,7 @@ function describeMealViolation(v) {
       return v.source === "user"
         ? `Contains "${v.detail}" — the crew member has personally flagged this as something they cannot eat.`
         : `Contains/implies "${v.detail}" (detected via ${v.source}) which matches the user's required allergen avoidance "${v.tag}" — strictly forbidden, including this hidden/derivative form.`;
-    case "DIET": return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
+    case "DIET": return describeDietViolation(v);
     case "MEAL_SLOT_CONTENT": return `${v.detail} — a normal person wouldn't recognize this as ${v.mealType} and eat it at that time of day. Replace it with a genuinely typical ${v.mealType} dish. If a protein/macro target is hard to hit with ${v.mealType}-appropriate foods, that's fine — the DAILY total across all meals is what matters, not this one meal in isolation.`;
     case "PORTION_SCALE": return `${v.detail}. Rebuild this ${v.mealType} at the right scale for its slot.`;
     case "TITLE": return v.suggestedName
@@ -3689,10 +3770,10 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
 
           if (!hasBlockingViolation(violations)) break;
           for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
-            console.error(`[wall] BLOCK day=${overallDayNum} attempt=${blockAttempt} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}" — refusing to serve this meal, no repair attempted`);
+            console.error(`[wall] BLOCK day=${overallDayNum} attempt=${blockAttempt} ${v.ruleId} tag=${v.tag} source=${v.source} meal="${v.mealName}" detail="${v.detail}" — refusing to serve this meal, no repair attempted`);
             if (process.env.WALL_DEBUG) {
               const blockedMeal = meals.find(m => m.name === v.mealName);
-              console.error(`[wall-debug] ingredients=${JSON.stringify(blockedMeal?.ingredients)} allergens_present=${JSON.stringify(blockedMeal?.allergens_present)}`);
+              console.error(`[wall-debug] name="${blockedMeal?.name}" description="${blockedMeal?.description}" tip="${blockedMeal?.tip}" ingredients=${JSON.stringify(blockedMeal?.ingredients)} allergens_present=${JSON.stringify(blockedMeal?.allergens_present)}`);
             }
           }
           if (blockAttempt === REPAIR_ATTEMPTS) {
