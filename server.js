@@ -3594,6 +3594,24 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
   // burning their one free pairing on a request that never produced a plan.
   let reservedFreeSlot = false;
   let reservedEmail = null;
+  // Closes the gap between the frontend's 90s client-side abort (generatePlan()
+  // in App.jsx) and this function's 120s maxDuration (vercel.json): if the
+  // client gives up and disconnects in that ~30s window, a legitimately-slow-
+  // but-successful generation can still finish server-side, having already
+  // reserved (consumed) the user's one free pairing — and since nobody is
+  // listening for the response anymore, the catch block's release-on-error
+  // never runs either. Without this, that free pairing is burned forever on
+  // a request the user never actually saw a plan for. "finish" fires once a
+  // response has been fully sent (success or error); "close" fires whenever
+  // the underlying connection tears down, which happens without a prior
+  // "finish" exactly when the client aborted early.
+  let responseFinished = false;
+  res.on("finish", () => { responseFinished = true; });
+  res.on("close", () => {
+    if (!responseFinished && reservedFreeSlot && reservedEmail) {
+      releasePairingUsage(reservedEmail).catch(e => console.error("release-on-disconnect failed:", e.message));
+    }
+  });
   try {
     const { data, lang } = req.body;
     if (!data) return res.status(400).json({ error: "Missing 'data' in request body" });
