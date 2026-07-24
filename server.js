@@ -1077,21 +1077,21 @@ function findMealSlotContentViolation(meal) {
   const text = [meal.name, meal.description].filter(Boolean).join(" ");
   if (meal.type === "Lunch" || meal.type === "Dinner") {
     const m = text.match(APPETIZER_MEAL_PATTERN);
-    if (m) return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is appetizer/small-plate scale, not a complete ${meal.type}` };
+    if (m) return { code: "MEAL_SLOT_CONTENT", category: "appetizer_at_meal", detail: `"${m[0]}" is appetizer/small-plate scale, not a complete ${meal.type}` };
     const bm = text.match(BREAKFAST_STYLE_AT_DINNER_PATTERN);
-    if (bm) return { code: "MEAL_SLOT_CONTENT", detail: `"${bm[0]}" is a breakfast-style dish, not appropriate for ${meal.type}` };
+    if (bm) return { code: "MEAL_SLOT_CONTENT", category: "breakfast_at_meal", detail: `"${bm[0]}" is a breakfast-style dish, not appropriate for ${meal.type}` };
     const dm = text.match(DESSERT_AS_MEAL_PATTERN);
-    if (dm) return { code: "MEAL_SLOT_CONTENT", detail: `"${dm[0]}" is dessert standing in as the entire meal, not appropriate for ${meal.type}` };
+    if (dm) return { code: "MEAL_SLOT_CONTENT", category: "dessert_as_meal", detail: `"${dm[0]}" is dessert standing in as the entire meal, not appropriate for ${meal.type}` };
   }
   if (meal.type === "Breakfast") {
     const m = text.match(DINNER_STYLE_AT_BREAKFAST_PATTERN);
     if (m && !(/^soups?$/i.test(m[0]) && BREAKFAST_SOUP_EXEMPT_PATTERN.test(text))) {
-      return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is a lunch/dinner-style dish, not appropriate for Breakfast` };
+      return { code: "MEAL_SLOT_CONTENT", category: "dinner_at_breakfast", detail: `"${m[0]}" is a lunch/dinner-style dish, not appropriate for Breakfast` };
     }
   }
   if (meal.type === "Snack") {
     const m = text.match(HEAVY_MAIN_AS_SNACK_PATTERN);
-    if (m) return { code: "MEAL_SLOT_CONTENT", detail: `"${m[0]}" is a full dinner-format main, not appropriate for a Snack` };
+    if (m) return { code: "MEAL_SLOT_CONTENT", category: "heavy_main_as_snack", detail: `"${m[0]}" is a full dinner-format main, not appropriate for a Snack` };
   }
   return null;
 }
@@ -1482,6 +1482,32 @@ function describeDietViolation(v) {
   return `Contains "${v.detail}" which violates the "${v.dietTag}" diet rule.`;
 }
 
+// Category-specific substitute suggestions, same reasoning as
+// describeDietViolation above: a vague "make it more typical" repair
+// message lets the model reach for another equally-wrong dish on the next
+// attempt (confirmed live 2026-07-24 — "Grilled Steak & Eggs" survived
+// BOTH repair attempts at Breakfast, failing the whole day). Naming
+// concrete, genuinely typical alternatives per category is what actually
+// converges, matching every other repair-message fix this session.
+function describeMealSlotViolation(v) {
+  const base = `${v.detail} — a normal person wouldn't recognize this as ${v.mealType} and eat it at that time of day.`;
+  const suffix = ` If a protein/macro target is hard to hit with ${v.mealType}-appropriate foods, that's fine — the DAILY total across all meals is what matters, not this one meal in isolation.`;
+  switch (v.category) {
+    case "dinner_at_breakfast":
+      return `${base} Rebuild it around a genuinely typical breakfast format instead — eggs (scrambled/omelet/frittata), oats/overnight oats, yogurt with granola, a breakfast burrito, or breakfast-specific meats (bacon, sausage, ham) rather than a dinner protein like steak/chicken breast/pork.${suffix}`;
+    case "breakfast_at_meal":
+      return `${base} Rebuild it around a genuinely typical ${v.mealType} format instead — a protein + vegetable + starch plate, a grain bowl, a wrap, or a hearty salad with protein — not a breakfast dish like pancakes/waffles/oatmeal/cereal.${suffix}`;
+    case "appetizer_at_meal":
+      return `${base} Scale it up to a complete ${v.mealType} plate — add a full protein portion, a starch/grain, and a vegetable side — rather than leaving it at small-plate/appetizer size.${suffix}`;
+    case "dessert_as_meal":
+      return `${base} Replace it with a real ${v.mealType} built around a protein, vegetable, and starch — dessert items (cake, cookies, ice cream, brownies, pie) can be a small side note at most, never the entire meal.${suffix}`;
+    case "heavy_main_as_snack":
+      return `${base} Rebuild it as a genuinely snack-sized item instead — nuts, fruit, yogurt, a protein bar, hummus with vegetables, or a small portion of leftovers — not a full dinner-format main like a roast/stew/curry/casserole.${suffix}`;
+    default:
+      return `${base} Replace it with a genuinely typical ${v.mealType} dish.${suffix}`;
+  }
+}
+
 const WALL_RULES = [
   {
     id: "no_allergens",
@@ -1513,7 +1539,7 @@ const WALL_RULES = [
       const v = findMealSlotContentViolation(meal);
       return { pass: !v, violations: v ? [v] : [] };
     },
-    message: (v) => `${v.detail} — a normal person wouldn't recognize this as ${v.mealType} and eat it at that time of day. Replace it with a genuinely typical ${v.mealType} dish. If a protein/macro target is hard to hit with ${v.mealType}-appropriate foods, that's fine — the DAILY total across all meals is what matters, not this one meal in isolation.`,
+    message: describeMealSlotViolation,
   },
   {
     id: "portion_scale",
@@ -4061,6 +4087,37 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
               }
               return null;
             }
+          }
+        }
+
+        // Third-tier last resort — meal_slot_appropriateness can't be fixed
+        // by stripping (unlike a minor seasoning, the offending term here
+        // is usually the meal's hero ingredient — e.g. "steak" in "Grilled
+        // Steak & Eggs" — removing it would leave an empty/nonsensical
+        // meal). Confirmed live 2026-07-24: the model regenerated an
+        // equally slot-inappropriate dish across BOTH repair attempts even
+        // with the directive substitution message above, failing the
+        // entire plan (503) over one meal being timed wrong rather than
+        // actually unsafe/non-compliant. A meal that's merely atypical for
+        // its time slot — but otherwise safe, diet-compliant, and
+        // correctly portioned — is a far better outcome for the crew
+        // member than losing the whole plan, so accept it here as a final,
+        // logged downgrade instead of refusing to serve the day. Only
+        // applies when it's the SOLE remaining issue for that meal — a
+        // meal with any other unresolved REPAIR violation still fails
+        // normally below.
+        const byMealRemaining = new Map();
+        for (const v of repairableViolations(violations)) {
+          if (v.mealIndex === undefined) continue;
+          if (!byMealRemaining.has(v.mealIndex)) byMealRemaining.set(v.mealIndex, []);
+          byMealRemaining.get(v.mealIndex).push(v);
+        }
+        for (const mealViolations of byMealRemaining.values()) {
+          if (mealViolations.length === 1 && mealViolations[0].ruleId === "meal_slot_appropriateness") {
+            const v = mealViolations[0];
+            console.warn(`[wall] ACCEPTED slot mismatch (last resort) day=${overallDayNum} meal="${v.mealName}" detail="${v.detail}"`);
+            logWallViolation({ ...v, day: overallDayNum, attempt: REPAIR_ATTEMPTS + 1, source: "last-resort-accept-slot-mismatch" });
+            violations = violations.filter(x => x !== v);
           }
         }
 

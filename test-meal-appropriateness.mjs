@@ -12,7 +12,7 @@ const {
   findMealTitleViolation, findMealIconViolation, getMealHeroCategory,
   findCrossDayVarietyViolations, titlesShareSignificantPattern,
   findMealAllergenViolations, ALLERGEN_DERIVATIVES, deterministicTitleFix, deterministicFodmapGarlicFix,
-  deterministicIngredientStripFix,
+  deterministicIngredientStripFix, WALL_RULES,
 } = await import("./server.js");
 
 let passed = 0;
@@ -280,6 +280,32 @@ console.log("\n=== Regression: American-spelling \"yogurt\" matches the milk all
   const dairyAllergyMeal = meal({ type: "Snack", name: "Yogurt Cup", ingredients: ing("yogurt", "honey") });
   const v = findMealAllergenViolations(dairyAllergyMeal, new Set(["milk"]), "");
   check('a meal with "yogurt" (no "h") is caught for a dairy-allergic user', v.some(x => x.tag === "milk"), JSON.stringify(v));
+}
+
+// ── Regression: "Grilled Steak & Eggs" at Breakfast survived BOTH repair ──
+// ── attempts and 503'd the whole plan (production, 2026-07-24) — the ────
+// ── repair message was too vague to converge. Message must now name ──────
+// ── concrete breakfast-appropriate alternatives instead of just saying ───
+// ── "make it typical".──────────────────────────────────────────────────
+console.log("\n=== Regression: directive meal-slot repair messages (2026-07-24 503) ===");
+{
+  const steakBreakfast = meal({ type: "Breakfast", name: "Grilled Steak & Eggs", description: "Steak with eggs.", ingredients: ing("steak", "eggs") });
+  const v = findMealSlotContentViolation(steakBreakfast);
+  check('"Grilled Steak & Eggs" at Breakfast is flagged', !!v, JSON.stringify(v));
+  check('violation carries category "dinner_at_breakfast"', v?.category === "dinner_at_breakfast", JSON.stringify(v));
+
+  const rule = WALL_RULES.find(r => r.id === "meal_slot_appropriateness");
+  const fullViolation = { ...v, mealType: "Breakfast", mealName: steakBreakfast.name };
+  const msg = rule.message(fullViolation);
+  check("dinner_at_breakfast message names concrete breakfast alternatives", /\beggs\b/i.test(msg) && /\boats\b/i.test(msg), msg);
+  check("dinner_at_breakfast message does NOT just say 'genuinely typical' with no examples", msg.length > 100, msg);
+
+  // Other categories also get concrete, non-generic guidance.
+  const dessertDinner = meal({ type: "Dinner", name: "Chocolate Cake", description: "A whole cake as dinner.", ingredients: ing("cake") });
+  const dv = findMealSlotContentViolation(dessertDinner);
+  check('dessert-as-dinner carries category "dessert_as_meal"', dv?.category === "dessert_as_meal", JSON.stringify(dv));
+  const dmsg = rule.message({ ...dv, mealType: "Dinner", mealName: dessertDinner.name });
+  check("dessert_as_meal message names a real substitute (protein/vegetable/starch)", /protein/i.test(dmsg) && /vegetable/i.test(dmsg), dmsg);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
