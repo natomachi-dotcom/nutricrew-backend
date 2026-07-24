@@ -12,7 +12,7 @@ const {
   findMealTitleViolation, findMealIconViolation, getMealHeroCategory,
   findCrossDayVarietyViolations, titlesShareSignificantPattern,
   findMealAllergenViolations, ALLERGEN_DERIVATIVES, deterministicTitleFix, deterministicFodmapGarlicFix,
-  deterministicIngredientStripFix, WALL_RULES,
+  deterministicIngredientStripFix, WALL_RULES, MEAL_SLOT_FORCED_CHOICES,
 } = await import("./server.js");
 
 let passed = 0;
@@ -306,6 +306,28 @@ console.log("\n=== Regression: directive meal-slot repair messages (2026-07-24 5
   check('dessert-as-dinner carries category "dessert_as_meal"', dv?.category === "dessert_as_meal", JSON.stringify(dv));
   const dmsg = rule.message({ ...dv, mealType: "Dinner", mealName: dessertDinner.name });
   check("dessert_as_meal message names a real substitute (protein/vegetable/starch)", /protein/i.test(dmsg) && /vegetable/i.test(dmsg), dmsg);
+}
+
+// ── Regression: forced-choice fallback has full category coverage ────────
+// ── (the last real attempt before a slot mismatch is silently accepted — ─
+// ── every category findMealSlotContentViolation can produce must have a ──
+// ── non-empty forced-choice list, or that category falls straight ────────
+// ── through to acceptance with no extra attempt). ─────────────────────────
+console.log("\n=== Regression: MEAL_SLOT_FORCED_CHOICES covers every violation category ===");
+{
+  const cases = [
+    { meal: meal({ type: "Breakfast", name: "Grilled Steak & Eggs", description: "Steak with eggs.", ingredients: ing("steak", "eggs") }), expectCategory: "dinner_at_breakfast" },
+    { meal: meal({ type: "Dinner", name: "Pancakes & Waffles", description: "A stack of pancakes.", ingredients: ing("pancakes", "syrup") }), expectCategory: "breakfast_at_meal" },
+    { meal: meal({ type: "Lunch", name: "Beef Carpaccio", description: "Thin beef carpaccio.", ingredients: ing("beef", "olive oil") }), expectCategory: "appetizer_at_meal" },
+    { meal: meal({ type: "Dinner", name: "Chocolate Cake", description: "A whole cake as dinner.", ingredients: ing("cake") }), expectCategory: "dessert_as_meal" },
+    { meal: meal({ type: "Snack", name: "Beef Stew", description: "A full beef stew.", ingredients: ing("beef", "potatoes") }), expectCategory: "heavy_main_as_snack" },
+  ];
+  for (const { meal: m, expectCategory } of cases) {
+    const v = findMealSlotContentViolation(m);
+    check(`"${m.name}" (${m.type}) produces category "${expectCategory}"`, v?.category === expectCategory, JSON.stringify(v));
+    const choices = MEAL_SLOT_FORCED_CHOICES[expectCategory];
+    check(`MEAL_SLOT_FORCED_CHOICES["${expectCategory}"] is a non-empty list of concrete alternatives`, Array.isArray(choices) && choices.length > 0, JSON.stringify(choices));
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

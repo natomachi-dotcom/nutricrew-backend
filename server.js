@@ -1979,6 +1979,82 @@ Generate a REPLACEMENT ${meal.type} meal that fixes every problem above, still f
   }
 }
 
+// Concrete, unambiguous dish concepts per meal-slot-violation category —
+// used only by regenerateMealForcedChoice below, as the last real attempt
+// before a slot mismatch would otherwise be silently accepted. Open-ended
+// "make it typical" instructions leave room for the model to reach for
+// another equally-wrong dish (confirmed live 2026-07-24 — "Grilled Steak &
+// Eggs" survived two open-ended repair attempts even with the initial
+// prompt's explicit "NOT a steak dinner" hard rule already in place).
+// Naming the exact allowed shapes removes that room entirely.
+const MEAL_SLOT_FORCED_CHOICES = {
+  dinner_at_breakfast: [
+    "scrambled eggs, an omelet, or a frittata",
+    "oatmeal or overnight oats",
+    "Greek yogurt with granola and fruit",
+    "whole-grain toast with nut butter or avocado",
+    "a breakfast burrito or wrap built on eggs",
+    "cottage cheese with fruit",
+  ],
+  breakfast_at_meal: [
+    "a protein bowl — protein + rice/quinoa + vegetables",
+    "a hearty salad with a full portion of grilled protein",
+    "a wrap or sandwich with a full protein portion",
+    "a stir-fry with protein, rice or noodles, and vegetables",
+  ],
+  appetizer_at_meal: [
+    "a protein bowl — protein + rice/quinoa + vegetables, full meal portion",
+    "a hearty salad with a full portion of grilled protein",
+    "a wrap or sandwich with a full protein portion",
+  ],
+  dessert_as_meal: [
+    "a protein bowl — protein + rice/quinoa + vegetables",
+    "a hearty salad with a full portion of grilled protein",
+    "a wrap or sandwich with a full protein portion",
+  ],
+  heavy_main_as_snack: [
+    "a small portion of nuts and dried fruit",
+    "Greek yogurt with berries",
+    "hummus with vegetable sticks",
+    "a hard-boiled egg with a piece of fruit",
+  ],
+};
+
+// Last real attempt before a meal-slot mismatch falls back to being
+// silently accepted (see the last-resort block in the day-generation
+// loop below). Removes the model's creative freedom entirely by naming
+// the exact allowed dish shapes for this violation's category — far more
+// constrained than the normal repair message, which still lets the model
+// invent its own dish. Only used when meal_slot_appropriateness is the
+// SOLE remaining violation, so diet/allergen correctness (already
+// satisfied by this point) still has to be re-derived by the model for
+// the new dish — this is not a template swap.
+async function regenerateMealForcedChoice(meal, violation, dietRules, kitchenAccessBlock, carriedFoodBlock = "") {
+  const choices = MEAL_SLOT_FORCED_CHOICES[violation.category];
+  if (!choices) return null;
+  const prompt = `Revise this ONE meal — TWO previous attempts to fix it both failed the same check and are no longer acceptable.
+
+ORIGINAL MEAL: ${JSON.stringify({ name: meal.name, description: meal.description })}
+
+PROBLEM: ${violation.detail} — ${meal.type} must be a genuinely typical ${meal.type} dish.
+
+Build the replacement around EXACTLY ONE of these dish concepts — do not invent a different one:
+${choices.map((c, i) => `${i + 1}. ${c}`).join("\n")}
+
+${dietRules}
+
+${kitchenAccessBlock}
+${carriedFoodBlock ? `\n${carriedFoodBlock}\n` : ""}
+Adapt the chosen concept to the diet and kitchen constraints above. Keep calories close to ${meal.calories} kcal. List EVERY ingredient (nothing omitted, however small) in "ingredients", and make sure "allergens_present" and "diet_tags" accurately reflect the NEW ingredients — do not carry over the old meal's values. Return ONLY the meal JSON.`;
+  try {
+    const replacement = await runStructured(prompt, MEAL_SCHEMA, 900, FAST_MODEL);
+    return { ...replacement, type: meal.type };
+  } catch (e) {
+    console.error(`[validator-repair] forced-choice regeneration failed for "${meal.name}": ${e.message}`);
+    return null;
+  }
+}
+
 // A title_quality violation's suggestedName is the exact, algorithmically-
 // correct fix (diet term stripped, whitespace collapsed) — trusting the
 // model to apply it verbatim via another regeneration round-trip is
@@ -4096,16 +4172,55 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
         // Steak & Eggs" — removing it would leave an empty/nonsensical
         // meal). Confirmed live 2026-07-24: the model regenerated an
         // equally slot-inappropriate dish across BOTH repair attempts even
-        // with the directive substitution message above, failing the
-        // entire plan (503) over one meal being timed wrong rather than
-        // actually unsafe/non-compliant. A meal that's merely atypical for
-        // its time slot — but otherwise safe, diet-compliant, and
-        // correctly portioned — is a far better outcome for the crew
-        // member than losing the whole plan, so accept it here as a final,
-        // logged downgrade instead of refusing to serve the day. Only
-        // applies when it's the SOLE remaining issue for that meal — a
-        // meal with any other unresolved REPAIR violation still fails
-        // normally below.
+        // with the directive substitution message above. Before ever
+        // accepting a mismatched meal, try ONE more time with a forced
+        // choice among concrete, named dish concepts (regenerateMealForcedChoice)
+        // — removing the model's creative freedom entirely converges far
+        // more reliably than another open-ended "make it typical" ask.
+        const stillSlotMismatched = repairableViolations(violations).filter(v => v.mealIndex !== undefined);
+        const slotMismatchByIndex = new Map();
+        for (const v of stillSlotMismatched) {
+          if (!slotMismatchByIndex.has(v.mealIndex)) slotMismatchByIndex.set(v.mealIndex, []);
+          slotMismatchByIndex.get(v.mealIndex).push(v);
+        }
+        const forcedChoiceIndices = [...slotMismatchByIndex.entries()]
+          .filter(([, vs]) => vs.length === 1 && vs[0].ruleId === "meal_slot_appropriateness")
+          .map(([i]) => i);
+        if (forcedChoiceIndices.length > 0) {
+          const forcedResults = await Promise.all(forcedChoiceIndices.map(async (i) => {
+            const v = slotMismatchByIndex.get(i)[0];
+            const fixed = await regenerateMealForcedChoice(meals[i], v, dayCtx.dietRules, dayCtx.kitchenAccessBlock, buildCarriedFoodPromptBlock(dayCtx.restrictedBorders));
+            return [i, fixed];
+          }));
+          let anyForced = false;
+          const forcedMeals = meals.map((meal, i) => {
+            const found = forcedResults.find(([idx]) => idx === i);
+            if (!found || !found[1]) return meal;
+            anyForced = true;
+            return found[1];
+          });
+          if (anyForced) {
+            ({ meals, totalCalories } = rescale(forcedMeals));
+            violations = validateDay(meals, validateOpts).violations;
+            for (const v of violations) logWallViolation({ ...v, day: overallDayNum, attempt: REPAIR_ATTEMPTS + 2, source: "last-resort-forced-choice" });
+            if (hasBlockingViolation(violations)) {
+              for (const v of violations.filter(bv => bv.severity === "BLOCK")) {
+                console.error(`[wall] BLOCK (introduced during forced-choice repair) day=${overallDayNum} ${v.ruleId} meal="${v.mealName}" detail="${v.detail}"`);
+              }
+              return null;
+            }
+          }
+        }
+
+        // Absolute final fallback — only reached if the forced-choice
+        // attempt above either didn't apply (no matching category) or
+        // still didn't converge. A meal that's merely atypical for its
+        // time slot — but otherwise safe, diet-compliant, and correctly
+        // portioned — is a far better outcome for the crew member than
+        // losing the whole plan, so accept it here as a final, logged
+        // downgrade instead of refusing to serve the day. Only applies
+        // when it's the SOLE remaining issue for that meal — a meal with
+        // any other unresolved REPAIR violation still fails normally below.
         const byMealRemaining = new Map();
         for (const v of repairableViolations(violations)) {
           if (v.mealIndex === undefined) continue;
@@ -4116,7 +4231,7 @@ app.post("/api/generate-plan", generatePlanLimiter, async (req, res) => {
           if (mealViolations.length === 1 && mealViolations[0].ruleId === "meal_slot_appropriateness") {
             const v = mealViolations[0];
             console.warn(`[wall] ACCEPTED slot mismatch (last resort) day=${overallDayNum} meal="${v.mealName}" detail="${v.detail}"`);
-            logWallViolation({ ...v, day: overallDayNum, attempt: REPAIR_ATTEMPTS + 1, source: "last-resort-accept-slot-mismatch" });
+            logWallViolation({ ...v, day: overallDayNum, attempt: REPAIR_ATTEMPTS + 2, source: "last-resort-accept-slot-mismatch" });
             violations = violations.filter(x => x !== v);
           }
         }
@@ -5802,5 +5917,6 @@ export {
   getDestinationFoodRules, unionCarriedBans, extractAirportCode,
   buildCarriedFoodNote, buildCustomsByCountry, buildKitchenAccessBlock,
   deterministicTitleFix, deterministicFodmapGarlicFix, deterministicIngredientStripFix,
+  MEAL_SLOT_FORCED_CHOICES, regenerateMealForcedChoice,
 };
 export default app;
