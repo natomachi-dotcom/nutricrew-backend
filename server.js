@@ -1073,8 +1073,23 @@ const DESSERT_AS_MEAL_PATTERN = /\b(pies?|ice cream|cookies?|brownies?|cupcakes?
 // wrong; here, main-meal content in a snack slot is wrong).
 const HEAVY_MAIN_AS_SNACK_PATTERN = /\b(roasts?|stews?|curr(?:y|ies)|casserole|lasagn?a|risotto|pot pie)\b/i;
 
-function findMealSlotContentViolation(meal) {
+// activeDietTags gates the two direction checks that assume a normal,
+// varied diet — carnivore is meat/fish/eggs at EVERY meal, all day (see the
+// carnivore prompt block), so "steak for breakfast" or "roast beef as a
+// snack" aren't just acceptable under that diet, they're the norm. Without
+// this, a fully diet-compliant carnivore meal would get wrongly flagged,
+// and repairing it would push toward oats/toast/yogurt — actively breaking
+// the user's actual diet to satisfy a rule that was never meant to apply
+// to them. The complex multi-component dish-format matches in these same
+// patterns (curry, casserole, risotto, burritos, etc.) don't need a
+// separate carnivore exemption — they inherently contain plant
+// ingredients, which diet_compliance already forbids for carnivore
+// regardless of time of day. APPETIZER_MEAL_PATTERN, BREAKFAST_STYLE_AT_DINNER_PATTERN,
+// and DESSERT_AS_MEAL_PATTERN are portion/format concerns independent of
+// diet, so they stay unconditional.
+function findMealSlotContentViolation(meal, activeDietTags = []) {
   const text = [meal.name, meal.description].filter(Boolean).join(" ");
+  const isCarnivore = activeDietTags.includes("carnivore");
   if (meal.type === "Lunch" || meal.type === "Dinner") {
     const m = text.match(APPETIZER_MEAL_PATTERN);
     if (m) return { code: "MEAL_SLOT_CONTENT", category: "appetizer_at_meal", detail: `"${m[0]}" is appetizer/small-plate scale, not a complete ${meal.type}` };
@@ -1083,13 +1098,13 @@ function findMealSlotContentViolation(meal) {
     const dm = text.match(DESSERT_AS_MEAL_PATTERN);
     if (dm) return { code: "MEAL_SLOT_CONTENT", category: "dessert_as_meal", detail: `"${dm[0]}" is dessert standing in as the entire meal, not appropriate for ${meal.type}` };
   }
-  if (meal.type === "Breakfast") {
+  if (meal.type === "Breakfast" && !isCarnivore) {
     const m = text.match(DINNER_STYLE_AT_BREAKFAST_PATTERN);
     if (m && !(/^soups?$/i.test(m[0]) && BREAKFAST_SOUP_EXEMPT_PATTERN.test(text))) {
       return { code: "MEAL_SLOT_CONTENT", category: "dinner_at_breakfast", detail: `"${m[0]}" is a lunch/dinner-style dish, not appropriate for Breakfast` };
     }
   }
-  if (meal.type === "Snack") {
+  if (meal.type === "Snack" && !isCarnivore) {
     const m = text.match(HEAVY_MAIN_AS_SNACK_PATTERN);
     if (m) return { code: "MEAL_SLOT_CONTENT", category: "heavy_main_as_snack", detail: `"${m[0]}" is a full dinner-format main, not appropriate for a Snack` };
   }
@@ -1535,8 +1550,8 @@ const WALL_RULES = [
     id: "meal_slot_appropriateness",
     severity: "REPAIR",
     scope: "meal",
-    check: (meal) => {
-      const v = findMealSlotContentViolation(meal);
+    check: (meal, ruleCtx) => {
+      const v = findMealSlotContentViolation(meal, ruleCtx.activeDietTags);
       return { pass: !v, violations: v ? [v] : [] };
     },
     message: describeMealSlotViolation,

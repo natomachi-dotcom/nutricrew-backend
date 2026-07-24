@@ -330,5 +330,26 @@ console.log("\n=== Regression: MEAL_SLOT_FORCED_CHOICES covers every violation c
   }
 }
 
+// ── Regression: carnivore diet is meat/fish/eggs at EVERY meal — steak at ─
+// ── breakfast or roast beef as a snack is the diet's NORM, not a slot ─────
+// ── mismatch. Without this exemption, a fully diet-compliant carnivore ────
+// ── meal got wrongly flagged, and repairing it would push toward oats/────
+// ── toast/yogurt — actively breaking the user's actual diet. ──────────────
+console.log("\n=== Regression: carnivore diet exempt from breakfast/snack slot checks ===");
+{
+  const steakBreakfast = meal({ type: "Breakfast", name: "Steak & Eggs", description: "Steak with eggs.", ingredients: ing("steak", "eggs") });
+  check("steak at Breakfast is flagged for a standard (no-diet) user", !!findMealSlotContentViolation(steakBreakfast, []));
+  check("steak at Breakfast is flagged for a keto user (not carnivore)", !!findMealSlotContentViolation(steakBreakfast, ["keto"]));
+  check("steak at Breakfast is NOT flagged for a carnivore user", !findMealSlotContentViolation(steakBreakfast, ["carnivore"]));
+
+  const roastSnack = meal({ type: "Snack", name: "Roast Beef Slices", description: "Sliced roast beef.", ingredients: ing("roast beef") });
+  check("roast beef as a Snack is flagged for a standard (no-diet) user", !!findMealSlotContentViolation(roastSnack, []));
+  check("roast beef as a Snack is NOT flagged for a carnivore user", !findMealSlotContentViolation(roastSnack, ["carnivore"]));
+
+  // Diet-independent checks (portion/format, not composition) still apply to carnivore.
+  const carpaccioDinner = meal({ type: "Dinner", name: "Beef Carpaccio", description: "Thin beef carpaccio.", ingredients: ing("beef", "olive oil") });
+  check("appetizer-scale Dinner is STILL flagged for a carnivore user (portion concern, not diet)", !!findMealSlotContentViolation(carpaccioDinner, ["carnivore"]));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
