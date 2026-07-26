@@ -125,10 +125,16 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
         console.error(`[webhook] set-premium-by-customer failed: ${r.status}`);
         return res.status(500).json({ error: "Failed to revoke user premium status" });
       }
-    } else if (event.type === "customer.subscription.updated") {
+    } else if (event.type === "customer.subscription.created" || event.type === "customer.subscription.updated") {
+      // Same sync for both: .created fires once when the trial starts (right
+      // alongside checkout.session.completed, which also sets trialEnd — this
+      // is a second, independent path to the same state in case that first
+      // subscriptions.retrieve() call ever fails); .updated fires on every
+      // later status change (trial -> active, a failed renewal -> past_due,
+      // etc). Both just resync from the subscription's current status.
       const subscription = event.data.object;
       const isPremium = PREMIUM_STATUSES.includes(subscription.status);
-      console.log(`[webhook] subscription.updated customer=${subscription.customer} status=${subscription.status} isPremium=${isPremium} trialEnd=${subscription.trial_end}`);
+      console.log(`[webhook] ${event.type} customer=${subscription.customer} status=${subscription.status} isPremium=${isPremium} trialEnd=${subscription.trial_end}`);
       const r = await fetch(`${CRUD_API_BASE}/api/set-premium-by-customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-internal-key": INTERNAL_API_KEY },
@@ -137,6 +143,27 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
       if (!r.ok) {
         console.error(`[webhook] set-premium-by-customer failed: ${r.status}`);
         return res.status(500).json({ error: "Failed to update user premium status" });
+      }
+    } else if (event.type === "customer.subscription.trial_will_end") {
+      // Fires 3 days before the trial converts to a real charge — Stripe
+      // already emails its own default trial-ending notice, so this is just
+      // a second, on-brand reminder pointing at the in-app cancel path
+      // (billing portal). Doesn't touch isPremium/trialEnd — nothing to sync,
+      // the subscription is still just "trialing".
+      const subscription = event.data.object;
+      const email = subscription.metadata?.email;
+      console.log(`[webhook] trial_will_end customer=${subscription.customer} email=${email} trialEnd=${subscription.trial_end}`);
+      if (email && resend) {
+        try {
+          await resend.emails.send({
+            from: FROM_EMAIL,
+            to: [email],
+            subject: "Your NutriCrew trial ends in 3 days",
+            html: `<p>Your 30-day free trial ends soon — your card will be charged starting then.</p><p>Nothing to do if you want to keep your subscription. To cancel before you're charged, open NutriCrew and go to Profile → Manage Subscription.</p>`,
+          });
+        } catch (e) {
+          console.error(`[webhook] trial_will_end reminder email failed:`, e.message);
+        }
       }
     } else if (event.type === "invoice.paid") {
       const invoice = event.data.object;
@@ -237,15 +264,16 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "https://nutricrew.ca";
 // Free trial length before the first real charge — change this one constant to adjust it.
 const TRIAL_DAYS = 30;
 
-// Launch monetization model: 1 free pairing (see FREE_PAIRING_LIMIT in
-// NutriCrew/server.js), then an immediate paid subscription — no trial. All
-// trial mechanics below (trial_period_days at checkout, the webhook's
-// trialEnd bookkeeping, the frontend's trial UI copy) stay fully intact and
-// are simply skipped while this is false, so setting TRIAL_ENABLED=true
-// later (e.g. for a re-engagement campaign) restores the trial flow without
-// any code changes. GET /api/config exposes this to the frontend so its
-// copy stays in sync with actual checkout behavior.
-const TRIAL_ENABLED = process.env.TRIAL_ENABLED === "true";
+// Final monetization model (2026-07-26): 1 free pairing (see
+// FREE_PAIRING_LIMIT in NutriCrew/server.js), then subscribing (monthly or
+// annual) starts a 30-day Stripe-native trial — trial_period_days at
+// checkout below — so the first real charge is always deferred 30 days on
+// BOTH plans. Stripe owns the trial clock, the eventual charge, and
+// cancellation; cancelling before day 30 means Stripe never charges the
+// card, so there's nothing for us to refund. No longer a campaign toggle —
+// this constant stays `true` permanently; GET /api/config still exposes it
+// so the frontend's trial copy has a single source of truth.
+const TRIAL_ENABLED = true;
 // The frontend never renders this string (it routes on the "premium_required"
 // error code and shows its own localized PremiumScreen copy) — kept flag-
 // aware anyway so no trial language survives anywhere a client might log or
@@ -5768,24 +5796,23 @@ app.post("/api/create-checkout-session", async (req, res) => {
     // and skip trial_period_days so they can't restart the free trial by
     // simply upgrading again. Same-card-different-email abuse is handled by
     // Stripe Radar's built-in "block if card used for a trial before" rule
-    // (configured in the Stripe dashboard, not here). Only relevant while
-    // TRIAL_ENABLED is true — see below.
+    // (configured in the Stripe dashboard, not here).
     const existingCustomerId = await getExistingStripeCustomerId(normalizedEmail);
     const isReturningCustomer = !!existingCustomerId;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "subscription",
-      payment_method_collection: "always", // card required up front, even during a trial
+      payment_method_collection: "always", // card required up front, even during the trial
       ...(isReturningCustomer
         ? { customer: existingCustomerId }
         : { customer_email: normalizedEmail }),
       metadata: { email: normalizedEmail },
       subscription_data: {
         metadata: { email: normalizedEmail },
-        // Launch model: no trial, charge begins immediately (see TRIAL_ENABLED
-        // above). Setting TRIAL_ENABLED=true restores the original
-        // trial_period_days behavior exactly as it was, untouched.
+        // Both Monthly and Annual get the same 30-day deferred-charge trial —
+        // Stripe owns the clock and the eventual first charge. Skipped only
+        // for a returning customer (trial-abuse guard above), same as before.
         ...(TRIAL_ENABLED && !isReturningCustomer ? { trial_period_days: TRIAL_DAYS } : {}),
       },
       line_items: [{

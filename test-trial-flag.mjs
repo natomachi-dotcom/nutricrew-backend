@@ -1,10 +1,12 @@
-// Regression tests for the TRIAL_ENABLED feature flag (launch monetization
-// model: 1 free pairing, then subscribe immediately — no trial — with all
-// trial mechanics preserved and re-enablable via TRIAL_ENABLED=true).
+// Regression tests for the final monetization model (2026-07-26): 1 free
+// pairing, then subscribing (monthly or annual) always starts a 30-day
+// Stripe-native trial before the first charge. TRIAL_ENABLED is no longer a
+// campaign toggle — it's now a hardcoded `true` — so these tests assert it
+// stays true (and the trial copy stays present) regardless of what's in the
+// environment, guarding against the old env-toggle behavior creeping back.
 //
-// TRIAL_ENABLED is read from process.env once at module load, so each
-// variant below is checked in its own subprocess (can't just re-import in
-// this process — the module cache would return the same value twice).
+// Each variant below is checked in its own subprocess so a stray
+// TRIAL_ENABLED env var can't leak between checks via the module cache.
 //
 // Usage: node test-trial-flag.mjs
 
@@ -33,26 +35,25 @@ function readFlagsInSubprocess(env) {
   return JSON.parse(lastLine);
 }
 
-console.log("\n=== TRIAL_ENABLED default (no env var set) ===");
+console.log("\n=== TRIAL_ENABLED with no env var set ===");
 {
   const { TRIAL_ENABLED, ...envWithoutFlag } = process.env;
   const flags = readFlagsInSubprocess(envWithoutFlag);
-  check("defaults to false", flags.TRIAL_ENABLED === false, JSON.stringify(flags));
-  check("premium-required message has no trial language", !/free month|free trial/i.test(flags.PREMIUM_REQUIRED_MESSAGE), flags.PREMIUM_REQUIRED_MESSAGE);
-  check("premium-required message mentions the real launch price", flags.PREMIUM_REQUIRED_MESSAGE.includes("$7.99"), flags.PREMIUM_REQUIRED_MESSAGE);
+  check("is true", flags.TRIAL_ENABLED === true, JSON.stringify(flags));
+  check("premium-required message carries trial language", /free month/i.test(flags.PREMIUM_REQUIRED_MESSAGE), flags.PREMIUM_REQUIRED_MESSAGE);
 }
 
-console.log("\n=== TRIAL_ENABLED=false explicit ===");
+console.log("\n=== TRIAL_ENABLED=false in env can no longer disable it ===");
 {
   const flags = readFlagsInSubprocess({ ...process.env, TRIAL_ENABLED: "false" });
-  check("stays false", flags.TRIAL_ENABLED === false, JSON.stringify(flags));
+  check("still true — not a toggle anymore", flags.TRIAL_ENABLED === true, JSON.stringify(flags));
+  check("premium-required message still carries trial language", /free month/i.test(flags.PREMIUM_REQUIRED_MESSAGE), flags.PREMIUM_REQUIRED_MESSAGE);
 }
 
-console.log("\n=== TRIAL_ENABLED=true restores the trial flow ===");
+console.log("\n=== TRIAL_ENABLED=true explicit (redundant, but must still work) ===");
 {
   const flags = readFlagsInSubprocess({ ...process.env, TRIAL_ENABLED: "true" });
-  check("flips to true", flags.TRIAL_ENABLED === true, JSON.stringify(flags));
-  check("premium-required message reverts to the original trial copy", /free month/i.test(flags.PREMIUM_REQUIRED_MESSAGE), flags.PREMIUM_REQUIRED_MESSAGE);
+  check("is true", flags.TRIAL_ENABLED === true, JSON.stringify(flags));
   check("TRIAL_DAYS is untouched (still 30)", flags.TRIAL_DAYS === 30, JSON.stringify(flags));
 }
 
