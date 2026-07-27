@@ -369,6 +369,22 @@ console.log("\n=== F. Kitchen access ===");
   // the exact allowed set. The violation now carries allowedMethods so the
   // repair message can hand over the exact fix directly.
   check('kitchen violation carries allowedMethods for the repair message', Array.isArray(stoveInHotel?.allowedMethods) && stoveInHotel.allowedMethods.includes("no_cook"), JSON.stringify(stoveInHotel));
+
+  // Regression: live verification (2026-07-27) found a "no_cook" breakfast
+  // (hotel, no kitchen) pass the structured prep_method check while its
+  // free-text prep/tip still said "toast it using the hotel toaster" and
+  // "use a hotel kettle to heat water" — the model reached for unnamed
+  // appliances even though stove/oven/baking were already forbidden.
+  const toasterInHotel = findMealKitchenViolation(meal({ prep_method: "no_cook", prep: "Toast the bread using the hotel toaster." }), ["hotel"]);
+  check("no_cook meal flagged when prep text mentions a toaster on a kitchen-less day", !!toasterInHotel, JSON.stringify(toasterInHotel));
+  const kettleInHotelTip = findMealKitchenViolation(meal({ prep_method: "no_cook", tip: "Use a hotel kettle to heat water for a water-bath method." }), ["hotel"]);
+  check("no_cook meal flagged when tip text mentions a kettle on a kitchen-less day", !!kettleInHotelTip, JSON.stringify(kettleInHotelTip));
+  const hotplateInFridge = findMealKitchenViolation(meal({ prep_method: "no_cook", prep: "Warm it on a hot plate if one is available." }), ["fridge"]);
+  check("no_cook meal flagged when prep text mentions a hot plate on a fridge-only day", !!hotplateInFridge, JSON.stringify(hotplateInFridge));
+  const toasterOkFullKitchen = findMealKitchenViolation(meal({ prep_method: "stove_oven", prep: "Toast the bread using the kitchen toaster." }), ["full_kitchen"]);
+  check("toaster mention fine when a full kitchen is actually available", !toasterOkFullKitchen);
+  const microwaveMentionOkMicrowaveDay = findMealKitchenViolation(meal({ prep_method: "microwave", prep: "Heat in the microwave for 2 minutes." }), ["microwave"]);
+  check("microwave mention fine on a microwave-access day (not treated as a forbidden appliance)", !microwaveMentionOkMicrowaveDay);
 }
 
 // ── G. Customs ────────────────────────────────────────────────────────────

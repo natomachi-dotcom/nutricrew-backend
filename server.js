@@ -1369,6 +1369,15 @@ const KITCHEN_PREP_METHOD_ALLOW = {
   fridge: ["no_cook"],
   airplane_food: ["airplane_provided"],
 };
+// Live-verified 2026-07-22: a "no_cook" breakfast (hotel, no kitchen) passed
+// the structured prep_method check while its free-text prep/tip still said
+// "toast it using the hotel toaster" and "use a hotel kettle to heat water."
+// The prompt already named stove/oven/baking as forbidden but never named
+// these specific appliances, so the model treated them as fair game. Scoped
+// to just toaster/kettle/hot plate (not stove/oven/pot/pan/grill) to keep
+// false positives near zero — those nouns can legitimately appear when a
+// meal is SOURCED already-made from a buffet/restaurant, which is compliant.
+const FORBIDDEN_HEAT_APPLIANCE_PATTERN = /\b(toaster|kettle|hot[- ]?plate)\b/i;
 
 function findMealKitchenViolation(meal, kitchenList) {
   const list = (Array.isArray(kitchenList) ? kitchenList : [kitchenList]).filter(Boolean);
@@ -1384,6 +1393,17 @@ function findMealKitchenViolation(meal, kitchenList) {
       detail: `prep_method "${meal.prep_method}" isn't achievable with kitchen access [${list.join(", ")}]`,
       allowedMethods: [...allowedAcrossDay],
     };
+  }
+  if (!allowedAcrossDay.has("stove_oven")) {
+    const text = [meal.prep, meal.tip].filter(Boolean).join(" ");
+    const match = text.match(FORBIDDEN_HEAT_APPLIANCE_PATTERN);
+    if (match) {
+      return {
+        code: "KITCHEN",
+        detail: `prep/tip text says to use a "${match[0]}" but this kitchen access [${list.join(", ")}] has no such equipment`,
+        allowedMethods: [...allowedAcrossDay],
+      };
+    }
   }
   return null;
 }
@@ -2235,10 +2255,10 @@ const COOKING_PREF_GUIDANCE = {
 
 const KITCHEN_ACCESS_RULES = {
   full_kitchen: `full_kitchen: Full kitchen (stove, oven, fridge, cookware). All cooking methods OK.`,
-  hotel: `hotel: NO kitchen — no stove, oven, or any cooking equipment. Meals MUST be no-cook (ready-to-eat, assembled from pre-cooked/store-bought items, or grab-and-go). "prep" = assembly/slicing/opening only. NEVER mention cooking, heating on a stove, or baking. REFRIGERATION: for any perishable ingredient (fresh proteins, dairy, cut produce, pre-cooked items), add a note in the "tip" field stating it needs refrigeration — advise the crew member to request a hotel mini-fridge or to consume the item within 2 hours of purchase if no fridge is available.`,
-  microwave: `microwave: No stove/oven, microwave only. No-cook/assembly (same as hotel) is fine, PLUS microwave methods (microwaveable cups, steam-in-bag veg, reheating). "prep" may include microwave times. NEVER mention stove, oven, or grill. REFRIGERATION: for any perishable ingredient, add a note in the "tip" field advising the crew member to request a hotel mini-fridge or consume within 2 hours if no fridge is available.`,
+  hotel: `hotel: NO kitchen and NO heating appliances of any kind — no stove, oven, toaster, kettle, hot plate, or microwave. Meals MUST be entirely ready-to-eat as purchased or served: pre-made items from a hotel buffet/room service/nearby store, or items that need zero heating (fresh fruit, yogurt, pre-made sandwiches, cold cuts). "prep" = assembly/slicing/opening/selecting ONLY. NEVER mention cooking, toasting, heating on a stove, baking, or using a kettle/hot plate/toaster — not even "if available" or as an optional method; assume none of that equipment exists. If a dish is normally cooked (eggs, toast, oatmeal), it must be SOURCED already-made (e.g. "request pre-cooked scrambled eggs and toast from the hotel breakfast buffet or room service") — never instruct the crew member to cook, toast, or heat it themselves. This "never mention/never instruct" rule applies to BOTH the "prep" and "tip" fields. REFRIGERATION: for any perishable ingredient (fresh proteins, dairy, cut produce, pre-cooked items), add a note in the "tip" field stating it needs refrigeration — advise the crew member to request a hotel mini-fridge or to consume the item within 2 hours of purchase if no fridge is available.`,
+  microwave: `microwave: No stove/oven/toaster/kettle/hot plate — microwave only. No-cook/assembly (same as hotel) is fine, PLUS microwave methods (microwaveable cups, steam-in-bag veg, reheating). "prep" may include microwave times. NEVER mention stove, oven, grill, toaster, or kettle — not even "if available." This applies to BOTH the "prep" and "tip" fields. REFRIGERATION: for any perishable ingredient, add a note in the "tip" field advising the crew member to request a hotel mini-fridge or consume within 2 hours if no fridge is available.`,
   airplane_food: `airplane_food: Airline meal served on board — no prep possible. "description"/"prep"/"tip" = how to SELECT or SUPPLEMENT airline/airport food (e.g. choose salad over fries, bring own nuts, ask for black coffee). Do NOT invent a from-scratch recipe.`,
-  fridge: `fridge: Refrigerator available but NO cooking equipment (no stove, oven, or microwave). Meals MUST be cold/no-cook: pre-made salads, cold wraps, yogurt, cheese, deli meats, fresh fruit, overnight oats, cold-brew etc. "prep" = assemble/portion/slice only. Perishables can be stored safely in the fridge.`,
+  fridge: `fridge: Refrigerator available but NO cooking equipment (no stove, oven, microwave, toaster, kettle, or hot plate). Meals MUST be cold/no-cook: pre-made salads, cold wraps, yogurt, cheese, deli meats, fresh fruit, overnight oats, cold-brew etc. "prep" = assemble/portion/slice only. NEVER mention heating anything, even "if available." This applies to BOTH the "prep" and "tip" fields. Perishables can be stored safely in the fridge.`,
 };
 
 // Every prep_method value the schema allows — used below to spell out the
